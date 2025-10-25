@@ -1,0 +1,3 @@
+[submodule "r-smoe"]
+	path = lib/defenses/r-smoe
+	url = https://github.com/yihsinli/r-smoe.git
