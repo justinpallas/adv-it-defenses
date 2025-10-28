@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import copy
 import json
+import subprocess
+import sys
 from pathlib import Path
 from typing import Dict, List, Tuple
 
@@ -168,6 +170,52 @@ def version() -> None:
     from advdef import __version__
 
     click.echo(__version__)
+
+
+@app.group()
+def setup() -> None:
+    """Environment helpers for optional components."""
+
+
+@setup.command("r-smoe")
+@click.option(
+    "--root",
+    type=click.Path(path_type=Path, file_okay=False, dir_okay=True, resolve_path=True),
+    default=Path("external/r-smoe"),
+    help="Path to the R-SMOE submodule root.",
+)
+def setup_rsmoe(root: Path) -> None:
+    """Install R-SMOE runtime prerequisites (extensions + Python deps)."""
+    click.echo(f"[setup] Using R-SMOE root: {root}")
+    if not root.exists():
+        raise click.ClickException(
+            f"R-SMOE directory not found at {root}. Ensure the submodule is present."
+        )
+
+    # Ensure submodule contents are downloaded (no-op if already done)
+    click.echo("[setup] Updating submodules (if necessary)...")
+    subprocess.run(
+        ["git", "submodule", "update", "--init", "--recursive", str(root)],
+        check=True,
+    )
+
+    ext_dir = root / "submodules-2d-smoe"
+    simple_knn = ext_dir / "simple-knn"
+    diff_gauss = ext_dir / "diff-gaussian-rasterization"
+    for path in (simple_knn, diff_gauss):
+        if not path.exists():
+            raise click.ClickException(f"Expected extension directory missing: {path}")
+
+    def pip_install(args: List[str]) -> None:
+        cmd = [sys.executable, "-m", "pip", "install"] + args
+        click.echo(f"[setup] Running: {' '.join(cmd)}")
+        subprocess.run(cmd, check=True)
+
+    pip_install(["-e", str(simple_knn)])
+    pip_install(["-e", str(diff_gauss)])
+    pip_install(["scikit-image", "imageio"])
+
+    click.echo("[setup] R-SMOE dependencies installed successfully.")
 
 
 if __name__ == "__main__":

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import importlib
 import logging
 import shutil
 import subprocess
@@ -224,10 +225,15 @@ def run_training(
     npcs: Optional[int],
     file_name: str,
     extra_args: Optional[Sequence[str]],
+    working_dir: Path,
 ) -> None:
+    script_path = train_script.resolve()
+    dataset_dir = dataset_dir.resolve()
+    model_dir = model_dir.resolve()
+
     cmd: List[str] = [
         sys.executable,
-        str(train_script),
+        str(script_path),
         "-s",
         str(dataset_dir),
         "-m",
@@ -244,7 +250,8 @@ def run_training(
         cmd.extend(extra_args)
 
     logging.info("Running: %s", " ".join(cmd))
-    subprocess.run(cmd, check=True)
+    ensure_dir(working_dir / "all_result")
+    subprocess.run(cmd, check=True, cwd=str(working_dir))
 
 
 @register_defense("r-smoe")
@@ -255,6 +262,7 @@ class RSMoEDefense(Defense):
         super().__init__(config)
 
     def run(self, context: RunContext, variant: DatasetVariant) -> DatasetVariant:
+        _ensure_dependencies()
         params = self.config.params
 
         default_root = Path(__file__).resolve().parents[3] / "external" / "r-smoe"
@@ -323,15 +331,31 @@ class RSMoEDefense(Defense):
             if mode == "denoise":
                 ensure_denoise_layout(model_dir, iterations)
 
+            # Mirror dataset inside R-SMOE data/ to satisfy relative path expectations
+            rsmoe_data_root = ensure_dir(r_smoe_root / "data")
+            symlink_dir = rsmoe_data_root / image_name
+            dataset_dir_abs = dataset_dir.resolve()
+            if symlink_dir.exists() or symlink_dir.is_symlink():
+                if symlink_dir.is_symlink():
+                    symlink_dir.unlink()
+                else:
+                    shutil.rmtree(symlink_dir)
+            try:
+                symlink_dir.symlink_to(dataset_dir_abs, target_is_directory=True)
+            except OSError:
+                # Fallback: copy tree if symlink unsupported
+                shutil.copytree(dataset_dir_abs, symlink_dir)
+
             logging.info("R-SMOE processing %s", image_name)
             run_training(
                 train_script=train_script,
-                dataset_dir=dataset_dir,
+                dataset_dir=dataset_dir_abs,
                 model_dir=model_dir,
                 iterations=iterations,
                 npcs=npcs,
                 file_name=file_name,
                 extra_args=extra_args_seq,
+                working_dir=r_smoe_root,
             )
 
             render_path = find_render(model_dir)
@@ -359,3 +383,26 @@ class RSMoEDefense(Defense):
 
 
 __all__ = ["RSMoEDefense"]
+def _ensure_dependencies() -> None:
+    missing: List[str] = []
+    dependency_hints = {
+        "skimage": "Install scikit-image: `pip install scikit-image imageio`.",
+        "simple_knn": "Build simple-knn extension: `pip install -e ./external/r-smoe/submodules-2d-smoe/simple-knn`.",
+        "diff_gaussian_rasterization": "Build diff-gaussian-rasterization extension: `pip install -e ./external/r-smoe/submodules-2d-smoe/diff-gaussian-rasterization`.",
+    }
+
+    for module_name, hint in dependency_hints.items():
+        try:
+            importlib.import_module(module_name)
+        except ModuleNotFoundError:
+            missing.append(hint)
+
+    if missing:
+        message = "\n - ".join(
+            [
+                "Missing dependencies for R-SMOE defense:",
+                *missing,
+                "Run `advdef setup r-smoe` to install them automatically.",
+            ]
+        )
+        raise RuntimeError(message)

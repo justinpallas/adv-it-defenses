@@ -33,6 +33,18 @@ Ensure that additional dependencies (CUDA-enabled PyTorch, pyautoattack, the
 `plyfile` package, and the R-SMOE submodule requirements) are installed in the
 environment.
 
+To use the R-SMOE defense, run the helper command once to build the CUDA
+extensions and install the required Python packages in your current environment:
+
+```bash
+advdef setup r-smoe
+```
+
+If you prefer, you can follow the upstream instructions instead and create the
+`r-smoe` Conda environment provided in `external/r-smoe/my_environment.yml`. The
+command above captures the minimal additional packages required when reusing the
+environment created for this toolkit.
+
 ## Running an Experiment
 
 Configure an experiment by editing a YAML file (see `configs/resnet50_autoattack.yaml`).
