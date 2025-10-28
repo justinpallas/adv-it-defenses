@@ -185,8 +185,15 @@ class Pipeline:
     def run(self) -> Dict[str, Any]:
         dataset = self.build_dataset()
         variants = self.run_attacks(dataset)
+
+        baseline_inferences = self.run_inference(variants)
+
         defended = self.run_defenses(variants)
-        inference_results = self.run_inference(defended)
-        metrics = self.run_evaluation(dataset, defended, inference_results)
+        defended_inferences = self.run_inference(defended)
+
+        combined_variants = list(variants) + list(defended)
+        combined_inferences = list(baseline_inferences) + list(defended_inferences)
+
+        metrics = self.run_evaluation(dataset, combined_variants, combined_inferences)
         self.context.save_metrics(metrics)
         return metrics
