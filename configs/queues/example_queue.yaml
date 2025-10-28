@@ -1,0 +1,11 @@
+queue:
+  name: example_queue
+  concurrency: 1
+jobs:
+  - path: ../example_config.yaml
+    run_name: aa_r_smoe_standard
+  - path: ../example_config.yaml
+    run_name: aa_r_smoe_denoise
+    overrides:
+      defenses.0.params.mode: denoise
+      defenses.0.params.n_multi_model: 8

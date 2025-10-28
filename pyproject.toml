@@ -1,0 +1,38 @@
+[build-system]
+requires = ["setuptools>=64", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "advdef"
+version = "0.1.0"
+description = "Modular adversarial defense experimentation toolkit."
+requires-python = ">=3.10"
+authors = [
+  {name = "Justin Pallas"}
+]
+dependencies = [
+  "click>=8.1",
+  "pydantic>=2.5",
+  "pyyaml>=6.0",
+  "pandas>=1.5",
+  "numpy>=1.24",
+  "torch>=2.0",
+  "torchvision>=0.15",
+  "timm>=0.9",
+  "pyautoattack",
+  "Pillow",
+  "scipy>=1.9",
+  "plyfile>=0.7",
+]
+
+[project.optional-dependencies]
+dev = ["pytest", "black", "ruff"]
+
+[project.scripts]
+advdef = "advdef.cli:app"
+
+[tool.setuptools.packages.find]
+where = ["lib"]
+
+[tool.setuptools.package-dir]
+"" = "lib"
