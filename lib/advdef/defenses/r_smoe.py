@@ -372,6 +372,7 @@ class RSMoEDefense(Defense):
             "models_root": models_root.as_posix(),
             "recon_root": recon_root.as_posix(),
             "source_variant": variant.name,
+            "image_hw": variant.metadata.get("image_hw"),
         }
 
         return DatasetVariant(

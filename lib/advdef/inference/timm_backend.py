@@ -4,12 +4,13 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, Iterable, List, Sequence
+from typing import Dict, Iterable, List, Sequence, Tuple
 
 import pandas as pd
 import torch
 from PIL import Image
 from torch.utils.data import DataLoader, Dataset
+from torchvision import transforms
 
 from advdef.config import InferenceConfig, ModelConfig
 from advdef.core.context import RunContext
@@ -27,6 +28,27 @@ except ImportError as exc:  # pragma: no cover - dependency hint
 
 
 SUPPORTED_EXTENSIONS = (".png", ".jpg", ".jpeg", ".bmp", ".webp")
+
+
+class ExactEvalTransform:
+    """Apply normalization without resizing for pre-cropped adversarial images."""
+
+    def __init__(self, hw: Tuple[int, int], mean: Sequence[float], std: Sequence[float]) -> None:
+        self.expected_height = int(hw[0])
+        self.expected_width = int(hw[1])
+        self.to_tensor = transforms.ToTensor()
+        self.normalize = transforms.Normalize(mean=mean, std=std)
+
+    def __call__(self, img: Image.Image) -> torch.Tensor:  # type: ignore[override]
+        if not hasattr(img, "size"):
+            raise ValueError("Expected a PIL image with size attribute.")
+        width, height = img.size
+        if (height, width) != (self.expected_height, self.expected_width):
+            img = img.resize((self.expected_width, self.expected_height), Image.BICUBIC)
+        if img.mode != "RGB":
+            img = img.convert("RGB")
+        tensor = self.to_tensor(img)
+        return self.normalize(tensor)
 
 
 class ImageListDataset(Dataset):
@@ -82,7 +104,17 @@ class TimmInferenceBackend(InferenceBackend):
         model.to(device)
 
         data_config = resolve_data_config({}, model=model)
-        transform = create_transform(**data_config)
+
+        expected_hw = variant.metadata.get("image_hw") if isinstance(variant.metadata, dict) else None
+        if expected_hw is not None:
+            if isinstance(expected_hw, (list, tuple)) and len(expected_hw) == 2:
+                mean = data_config.get("mean") or (0.485, 0.456, 0.406)
+                std = data_config.get("std") or (0.229, 0.224, 0.225)
+                transform = ExactEvalTransform((int(expected_hw[0]), int(expected_hw[1])), mean, std)
+            else:
+                transform = create_transform(**data_config)
+        else:
+            transform = create_transform(**data_config)
 
         data_dir = Path(variant.data_dir)
         image_paths = sorted(

@@ -144,7 +144,10 @@ class Pipeline:
             DatasetVariant(
                 name="baseline",
                 data_dir=dataset.clean_dir,
-                metadata={"source": "baseline"},
+                metadata={
+                    "source": "baseline",
+                    "image_hw": dataset.metadata.get("image_hw"),
+                },
             )
         ]
         for attack_cfg in self.config.dataset.attacks:

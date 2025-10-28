@@ -341,9 +341,16 @@ class ImageNetAutoAttackBuilder(DatasetBuilder):
 
         baseline_paths = [baseline_dir / f"{info.path.stem}.png" for info in sample_infos]
 
+        recorded_hw: Optional[tuple[int, int]] = None
+
         for batch_idx, (start, end, batch_infos) in enumerate(iter_batches(sample_infos, batch_size), start=1):
             tensors = [load_image(info.path, transform) for info in batch_infos]
             batch_tensor = torch.stack(tensors, dim=0)
+
+            if recorded_hw is None and batch_tensor.numel() > 0:
+                _, _, height, width = batch_tensor.shape
+                recorded_hw = (height, width)
+
             save_images(
                 batch_tensor,
                 baseline_paths[start:end],
@@ -357,6 +364,9 @@ class ImageNetAutoAttackBuilder(DatasetBuilder):
 
         write_manifest(manifest_file, sample_infos, baseline_paths)
 
+        if recorded_hw is None:
+            recorded_hw = (224, 224)
+
         metadata = {
             "samples": sample_infos,
             "model_name": model_name,
@@ -369,6 +379,7 @@ class ImageNetAutoAttackBuilder(DatasetBuilder):
             "devkit_dir": str(devkit_dir),
             "imagenet_root": str(imagenet_root.resolve()),
             "input_dir": str(input_dir),
+            "image_hw": list(recorded_hw),
             "timestamp": time.time(),
         }
 
