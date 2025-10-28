@@ -18,7 +18,7 @@ dataset:
       name: autoattack_linf
       params:
         attacks: ["apgd-ce", "apgd-t", "square"]
-        eps: 0.0313725 # 8/255
+        eps: 0.05 # 0.0313725 8/255
         norm: Linf
         batch_size: 8
         device: auto
@@ -39,7 +39,8 @@ defenses:
     params:
       root: external/r-smoe
       mode: standard
-      iterations: 2000
+      iterations: 500
+      kernels: 2000
       file_name_prefix: rsmoe
 evaluation:
   type: imagenet
