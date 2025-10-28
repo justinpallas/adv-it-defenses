@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterable, List, Sequence
+from typing import Dict, Iterable, List, Sequence
 
 import pandas as pd
 import torch
@@ -97,7 +97,32 @@ class TimmInferenceBackend(InferenceBackend):
         records: List[dict] = []
 
         imagenet_info = ImageNetInfo()
-        class_map = imagenet_info.get_label_to_name()
+        class_map: Dict[int, str]
+        label_to_name = None
+        if hasattr(imagenet_info, "get_label_to_name"):
+            try:
+                label_to_name = imagenet_info.get_label_to_name()
+            except TypeError:
+                # Some versions expose it as a property instead of method
+                label_to_name = imagenet_info.get_label_to_name
+        elif hasattr(imagenet_info, "label_to_name"):
+            label_to_name = getattr(imagenet_info, "label_to_name")
+
+        if isinstance(label_to_name, dict):
+            class_map = {int(k): v for k, v in label_to_name.items()}
+        else:
+            class_map = {}
+            if hasattr(imagenet_info, "class_names"):
+                class_names = getattr(imagenet_info, "class_names")
+                if isinstance(class_names, (list, tuple)):
+                    class_map = {idx: name for idx, name in enumerate(class_names)}
+            elif hasattr(imagenet_info, "label_to_idx"):
+                mapping = getattr(imagenet_info, "label_to_idx")
+                if isinstance(mapping, dict):
+                    class_map = {int(idx): label for label, idx in mapping.items()}
+
+        if not class_map:
+            class_map = {}
 
         with torch.no_grad():
             for images, filenames in loader:
@@ -113,7 +138,7 @@ class TimmInferenceBackend(InferenceBackend):
                     for rank, (index, value) in enumerate(zip(idx_row.tolist(), val_row.tolist()), start=1):
                         record[f"top{rank}_index"] = int(index)
                         record[f"top{rank}_prob"] = float(value)
-                        record[f"top{rank}_label"] = class_map.get(int(index), "")
+                        record[f"top{rank}_label"] = class_map.get(int(index), str(int(index)))
                     records.append(record)
 
         results_dir = ensure_dir(context.artifacts_dir / "inference" / variant.name)
