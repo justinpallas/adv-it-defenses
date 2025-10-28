@@ -173,7 +173,11 @@ class Pipeline:
     def run_inference(self, variants: Iterable[DatasetVariant]) -> List[InferenceResult]:
         inference_cls = INFERENCE_BACKENDS.get(self.config.inference.type)
         backend: InferenceBackend = inference_cls(self.config.inference, self.config.model)
-        return [backend.run(self.context, variant) for variant in variants]
+        results: List[InferenceResult] = []
+        for variant in variants:
+            print(f"[debug] running inference for {variant.name}")
+            results.append(backend.run(self.context, variant))
+        return results
 
     def run_evaluation(
         self,

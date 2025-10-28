@@ -228,22 +228,22 @@ class AutoAttackAttack(Attack):
 
             write_manifest(manifest_path, samples, outputs)
 
-        variants.append(
-            DatasetVariant(
-                name=attack_name,
-                data_dir=str(output_dir),
-                parent="baseline",
-                metadata={
-                    "attack": attack_name,
-                    "display": display,
-                    "eps": eps,
-                    "norm": norm,
-                    "seed": seed_base + seed_offset,
-                    "count": len(samples),
-                    "manifest": manifest_path.as_posix(),
-                    "image_hw": image_hw,
-                },
+            variants.append(
+                DatasetVariant(
+                    name=attack_name,
+                    data_dir=str(output_dir),
+                    parent="baseline",
+                    metadata={
+                        "attack": attack_name,
+                        "display": display,
+                        "eps": eps,
+                        "norm": norm,
+                        "seed": seed_base + seed_offset,
+                        "count": len(samples),
+                        "manifest": manifest_path.as_posix(),
+                        "image_hw": image_hw,
+                    },
+                )
             )
-        )
 
         return variants
