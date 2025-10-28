@@ -17,11 +17,11 @@ build/
 *.egg-info/
 
 # Local datasets and downloads
-datasets/
-downloads/
+/datasets/
+/downloads/
 
 # Experiment outputs
-runs/
+/runs/
 
 # Logs and temporary files
 *.log
