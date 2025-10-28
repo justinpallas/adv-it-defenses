@@ -49,8 +49,9 @@ environment created for this toolkit.
 
 Configure an experiment by editing a YAML file (see `configs/resnet50_autoattack.yaml`).
 By default the ImageNet dataset builder downloads the validation split into
-`datasets/imagenet/val/` and the devkit into `datasets/imagenet/ILSVRC2012_devkit_t12/`
-the first time they are needed, caching the archives under `downloads/`.
+`datasets/imagenet/val/` and the devkit (ground-truth labels) into
+`datasets/imagenet/ILSVRC2012_devkit_t12/` the first time they are needed,
+caching the archives under `downloads/`.
 Override paths in the config only if you store the data elsewhere. Run the
 experiment with:
 

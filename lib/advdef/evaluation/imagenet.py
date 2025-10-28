@@ -27,6 +27,11 @@ def _build_label_map(samples: Sequence) -> Dict[str, int]:
             f"{stem}.jpg",
             f"{stem}.jpeg",
             f"{stem}.JPEG",
+            f"{stem}-checkpoint",
+            f"{stem}-checkpoint.png",
+            f"{stem}-checkpoint.jpg",
+            f"{stem}-checkpoint.jpeg",
+            f"{stem}-checkpoint.JPEG",
         }
         for candidate in candidates:
             label_map.setdefault(candidate, label)

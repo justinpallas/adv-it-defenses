@@ -273,7 +273,7 @@ class ImageNetAutoAttackBuilder(DatasetBuilder):
             else:
                 raise FileNotFoundError(f"Input directory {input_dir} does not exist.")
 
-        if require_correct and not ground_truth_path.exists():
+        if not ground_truth_path.exists():
             self._ensure_devkit_available(
                 devkit_dir=devkit_dir,
                 archive_path=devkit_archive,
@@ -287,7 +287,9 @@ class ImageNetAutoAttackBuilder(DatasetBuilder):
         if ground_truth_path.exists():
             ground_truth_labels, _ = load_ground_truth_labels(ground_truth_path)
         else:
-            ground_truth_labels = {}
+            raise FileNotFoundError(
+                f"Ground-truth file {ground_truth_path} is required but was not found."
+            )
 
         device = torch.device(
             "cuda"
