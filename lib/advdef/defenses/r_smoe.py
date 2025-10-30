@@ -301,7 +301,6 @@ class RSMoEDefense(Defense):
         iterations = params.get("iterations")
         npcs = params.get("npcs")
         file_name_prefix = params.get("file_name_prefix", variant.name)
-        n_multi_model = int(params.get("n_multi_model", 8))
         skip_existing = bool(params.get("skip_existing", True))
         extra_args = params.get("extra_args")
         extra_args_list: List[str] = list(extra_args) if extra_args else []
@@ -310,7 +309,10 @@ class RSMoEDefense(Defense):
             raise ValueError("R-SMOE mode must be 'standard' or 'denoise'.")
 
         if mode == "denoise":
+            n_multi_model = int(params.get("n_multi_model", 8))
             extra_args_list.extend(["--n_multi_model", str(n_multi_model)])
+        else:
+            n_multi_model = None
 
         extra_args_seq: Optional[Sequence[str]] = extra_args_list if extra_args_list else None
 
@@ -323,10 +325,11 @@ class RSMoEDefense(Defense):
             raise FileNotFoundError(f"Training script not found: {train_script}")
 
         extra_args_display = " ".join(extra_args_list) if extra_args_list else "<none>"
+        n_multi_model_display = n_multi_model if n_multi_model is not None else "<unused>"
         print(
             "[info] R-SMOE settings: "
             f"root={r_smoe_root} mode={mode} iterations={iterations} npcs={npcs} "
-            f"n_multi_model={n_multi_model} skip_existing={skip_existing} "
+            f"n_multi_model={n_multi_model_display} skip_existing={skip_existing} "
             f"file_prefix={file_name_prefix} extra_args={extra_args_display} "
             f"train_script={train_script}"
         )
@@ -413,6 +416,8 @@ class RSMoEDefense(Defense):
             "source_variant": variant.name,
             "image_hw": variant.metadata.get("image_hw"),
         }
+        if n_multi_model is not None:
+            metadata["n_multi_model"] = n_multi_model
 
         return DatasetVariant(
             name=f"{variant.name}-r-smoe",
