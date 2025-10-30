@@ -296,74 +296,141 @@ class RSMoEDefense(Defense):
         self._settings_reported = False
         self._prep_progress: Progress | None = None
         self._recon_progress: Progress | None = None
+        self._variant_images: dict[str, list[Path]] = {}
+        self._params_cache: dict[str, object] | None = None
 
-    def run(self, context: RunContext, variant: DatasetVariant) -> DatasetVariant:
-        _ensure_dependencies()
-        params = self.config.params
+    def _get_params(self) -> dict[str, object]:
+        if self._params_cache is None:
+            params = self.config.params
 
-        default_root = Path(__file__).resolve().parents[3] / "external" / "r-smoe"
-        r_smoe_root = Path(params.get("root", default_root))
-        if not r_smoe_root.exists():
-            raise FileNotFoundError(
-                f"R-SMOE root directory not found at {r_smoe_root}. "
-                "Provide 'root' in the defense configuration."
-            )
+            default_root = Path(__file__).resolve().parents[3] / "external" / "r-smoe"
+            r_smoe_root = Path(params.get("root", default_root))
+            if not r_smoe_root.exists():
+                raise FileNotFoundError(
+                    f"R-SMOE root directory not found at {r_smoe_root}. "
+                    "Provide 'root' in the defense configuration."
+                )
 
-        mode = str(params.get("mode", "standard"))
-        iterations = params.get("iterations")
-        npcs = params.get("npcs")
-        file_name_prefix = params.get("file_name_prefix", variant.name)
-        skip_existing = bool(params.get("skip_existing", True))
-        extra_args = params.get("extra_args")
-        extra_args_list: List[str] = list(extra_args) if extra_args else []
+            mode = str(params.get("mode", "standard"))
+            if mode not in {"standard", "denoise"}:
+                raise ValueError("R-SMOE mode must be 'standard' or 'denoise'.")
 
-        if mode not in {"standard", "denoise"}:
-            raise ValueError("R-SMOE mode must be 'standard' or 'denoise'.")
+            iterations = params.get("iterations")
+            npcs = params.get("npcs")
+            file_name_prefix = params.get("file_name_prefix")
+            skip_existing = bool(params.get("skip_existing", True))
+            image_filename = params.get("image_filename", DEFAULT_IMAGE_FILENAME)
 
-        if mode == "denoise":
-            n_multi_model = int(params.get("n_multi_model", 8))
-            extra_args_list.extend(["--n_multi_model", str(n_multi_model)])
-        else:
-            n_multi_model = None
+            extra_args = params.get("extra_args")
+            extra_args_list: List[str] = list(extra_args) if extra_args else []
 
-        extra_args_seq: Optional[Sequence[str]] = extra_args_list if extra_args_list else None
+            n_multi_model: Optional[int]
+            if mode == "denoise":
+                n_multi_model = int(params.get("n_multi_model", 8))
+                extra_args_list.extend(["--n_multi_model", str(n_multi_model)])
+            else:
+                n_multi_model = None
 
-        if params.get("train_script"):
-            train_script = Path(params["train_script"])
-        else:
-            default_name = "train_noisy_final.py" if mode == "denoise" else "train_render_metrics_final.py"
-            train_script = r_smoe_root / default_name
-        if not train_script.exists():
-            raise FileNotFoundError(f"Training script not found: {train_script}")
+            extra_args_seq: Optional[Sequence[str]] = extra_args_list if extra_args_list else None
 
-        if not getattr(self, "_settings_reported", False):
+            if params.get("train_script"):
+                train_script = Path(params["train_script"])
+            else:
+                default_name = "train_noisy_final.py" if mode == "denoise" else "train_render_metrics_final.py"
+                train_script = r_smoe_root / default_name
+            if not train_script.exists():
+                raise FileNotFoundError(f"Training script not found: {train_script}")
+
+            self._params_cache = {
+                "root": r_smoe_root,
+                "mode": mode,
+                "iterations": iterations,
+                "npcs": npcs,
+                "file_name_prefix": file_name_prefix,
+                "skip_existing": skip_existing,
+                "extra_args_list": extra_args_list,
+                "extra_args_seq": extra_args_seq,
+                "train_script": train_script,
+                "n_multi_model": n_multi_model,
+                "image_filename": image_filename,
+            }
+        return self._params_cache
+
+    def initialize(self, context: RunContext, variants: list[DatasetVariant]) -> None:
+        params = self._get_params()
+        r_smoe_root = params["root"]  # type: ignore[index]
+        mode = params["mode"]  # type: ignore[index]
+        iterations = params["iterations"]
+        npcs = params["npcs"]
+        skip_existing = params["skip_existing"]  # type: ignore[index]
+        extra_args_list = params["extra_args_list"]  # type: ignore[index]
+        train_script = params["train_script"]  # type: ignore[index]
+        n_multi_model = params["n_multi_model"]
+        file_name_prefix_param = params["file_name_prefix"]
+
+        self._variant_images = {}
+        total_images = 0
+        for variant in variants:
+            images = find_images(Path(variant.data_dir))
+            if not images:
+                raise FileNotFoundError(f"No supported images found in {variant.data_dir}.")
+            self._variant_images[variant.name] = images
+            total_images += len(images)
+
+        if not self._settings_reported:
             extra_args_display = " ".join(extra_args_list) if extra_args_list else "<none>"
             n_multi_model_display = n_multi_model if n_multi_model is not None else "<unused>"
+            file_prefix_display = file_name_prefix_param if file_name_prefix_param is not None else "<variant>"
             print(
                 "[info] R-SMOE settings: "
                 f"root={r_smoe_root} mode={mode} iterations={iterations} npcs={npcs} "
                 f"n_multi_model={n_multi_model_display} skip_existing={skip_existing} "
-                f"file_prefix={file_name_prefix} extra_args={extra_args_display} "
+                f"file_prefix={file_prefix_display} extra_args={extra_args_display} "
                 f"train_script={train_script}"
             )
             self._settings_reported = True
+
+        if self._prep_progress is not None:
+            self._prep_progress.close()
+        if self._recon_progress is not None:
+            self._recon_progress.close()
+
+        self._prep_progress = Progress(total=total_images, description="Preparing R-SMOE inputs", unit="images")
+        self._recon_progress = Progress(total=total_images, description="R-SMOE reconstruction", unit="images")
+
+    def run(self, context: RunContext, variant: DatasetVariant) -> DatasetVariant:
+        _ensure_dependencies()
+        params = self._get_params()
+
+        r_smoe_root = params["root"]  # type: ignore[index]
+        mode = params["mode"]  # type: ignore[index]
+        iterations = params["iterations"]
+        npcs = params["npcs"]
+        skip_existing = params["skip_existing"]  # type: ignore[index]
+        extra_args_seq = params["extra_args_seq"]  # type: ignore[index]
+        train_script = params["train_script"]  # type: ignore[index]
+        n_multi_model = params["n_multi_model"]
+        image_filename = params["image_filename"]  # type: ignore[index]
+        file_name_prefix_param = params["file_name_prefix"]
+
+        file_name_prefix = file_name_prefix_param if file_name_prefix_param is not None else variant.name
 
         variant_root = ensure_dir(context.artifacts_dir / "defenses" / "r-smoe" / variant.name)
         prepared_root = ensure_dir(variant_root / "prepared")
         models_root = ensure_dir(variant_root / "models")
         recon_root = ensure_dir(variant_root / "reconstructed")
 
-        images = find_images(Path(variant.data_dir))
+        images = self._variant_images.get(variant.name)
+        if images is None:
+            images = find_images(Path(variant.data_dir))
 
         if self._prep_progress is None:
             self._prep_progress = Progress(total=len(images), description="Preparing R-SMOE inputs", unit="images")
-        else:
-            self._prep_progress.add_total(len(images))
 
         prepared_datasets = prepare_dataset(
             images=images,
             output_root=prepared_root,
-            image_filename=params.get("image_filename", DEFAULT_IMAGE_FILENAME),
+            image_filename=image_filename,
             overwrite=True,
             convert_to_png_flag=True,
             progress=self._prep_progress,
@@ -371,12 +438,10 @@ class RSMoEDefense(Defense):
 
         logging.info("Found %d dataset(s) for R-SMOE defense in %s", len(prepared_datasets), prepared_root)
 
-        if self._recon_progress is None:
-            self._recon_progress = Progress(total=len(prepared_datasets), description="R-SMOE reconstruction", unit="images")
-        else:
-            self._recon_progress.add_total(len(prepared_datasets))
-
         progress = self._recon_progress
+        if progress is None:
+            progress = Progress(total=len(prepared_datasets), description="R-SMOE reconstruction", unit="images")
+            self._recon_progress = progress
         results: List[Path] = []
 
         for dataset_dir in prepared_datasets:
@@ -388,7 +453,8 @@ class RSMoEDefense(Defense):
             if skip_existing and dest_image.exists():
                 logging.debug("Skipping %s (reconstruction already exists).", image_name)
                 results.append(dest_image)
-                progress.update()
+                if progress is not None:
+                    progress.update()
                 continue
 
             ensure_dir(model_dir)
@@ -428,7 +494,8 @@ class RSMoEDefense(Defense):
             logging.debug("Copying %s -> %s", render_path, dest_image)
             shutil.copy2(render_path, dest_image)
             results.append(dest_image)
-            progress.update()
+            if progress is not None:
+                progress.update()
 
         metadata = {
             "defense": "r-smoe",

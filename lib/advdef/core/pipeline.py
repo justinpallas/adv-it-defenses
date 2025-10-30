@@ -167,6 +167,9 @@ class Pipeline:
             defense_cls = DEFENSES.get(defense_cfg.type)
             defense: Defense = defense_cls(defense_cfg)
 
+            if hasattr(defense, "initialize"):
+                defense.initialize(self.context, base_variants)
+
             for variant in base_variants:
                 defended.append(defense.run(self.context, variant))
 

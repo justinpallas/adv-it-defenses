@@ -78,41 +78,83 @@ class GrayscaleDefense(Defense):
         super().__init__(config)
         self._settings_reported = False
         self._progress: Progress | None = None
+        self._variant_images: dict[str, list[Path]] = {}
+        self._params_cache: dict[str, object] | None = None
 
-    def run(self, context: RunContext, variant: DatasetVariant) -> DatasetVariant:
-        params = self.config.params
-        patterns = params.get("extensions", ("*.png", "*.jpg", "*.jpeg", "*.bmp"))
-        mode = str(params.get("mode", "L")).upper()
-        replicate_rgb = bool(params.get("replicate_rgb", False))
-        overwrite = bool(params.get("overwrite", True))
-        dry_run = bool(params.get("dry_run", False))
-        format_hint = params.get("format")
-        workers = int(params.get("workers", max(1, (os.cpu_count() or 2) - 1)))
+    def _get_params(self) -> dict[str, object]:
+        if self._params_cache is None:
+            params = self.config.params
+            patterns = tuple(params.get("extensions", ("*.png", "*.jpg", "*.jpeg", "*.bmp")))
+            mode = str(params.get("mode", "L")).upper()
+            replicate_rgb = bool(params.get("replicate_rgb", False))
+            overwrite = bool(params.get("overwrite", True))
+            dry_run = bool(params.get("dry_run", False))
+            format_hint = params.get("format")
+            workers = int(params.get("workers", max(1, (os.cpu_count() or 2) - 1)))
 
-        if replicate_rgb and mode == "RGB":
-            # No need to re-run conversion when already targeting RGB.
-            replicate_rgb = False
+            if replicate_rgb and mode == "RGB":
+                replicate_rgb = False
+
+            self._params_cache = {
+                "patterns": patterns,
+                "mode": mode,
+                "replicate_rgb": replicate_rgb,
+                "overwrite": overwrite,
+                "dry_run": dry_run,
+                "format_hint": format_hint,
+                "workers": workers,
+            }
+        return self._params_cache
+
+    def initialize(self, context: RunContext, variants: list[DatasetVariant]) -> None:
+        params = self._get_params()
+        patterns = params["patterns"]  # type: ignore[index]
+
+        self._variant_images = {}
+        total_images = 0
+        for variant in variants:
+            input_dir = Path(variant.data_dir)
+            images = discover_images(input_dir, patterns)
+            if not images:
+                raise FileNotFoundError(f"No images matched the provided extensions in {input_dir}.")
+            self._variant_images[variant.name] = images
+            total_images += len(images)
 
         if not self._settings_reported:
             print(
                 "[info] Grayscale defense settings: "
-                f"mode={mode}, replicate_rgb={replicate_rgb}, format={format_hint}, "
-                f"overwrite={overwrite}, dry_run={dry_run}, workers={workers}"
+                f"mode={params['mode']}, replicate_rgb={params['replicate_rgb']}, format={params['format_hint']}, "
+                f"overwrite={params['overwrite']}, dry_run={params['dry_run']}, workers={params['workers']}"
             )
             self._settings_reported = True
+
+        if self._progress is not None:
+            self._progress.close()
+        self._progress = Progress(total=total_images, description="Grayscale conversion", unit="images")
+
+    def run(self, context: RunContext, variant: DatasetVariant) -> DatasetVariant:
+        params = self._get_params()
+        patterns = params["patterns"]  # type: ignore[index]
+        mode = params["mode"]  # type: ignore[index]
+        replicate_rgb = params["replicate_rgb"]  # type: ignore[index]
+        overwrite = params["overwrite"]  # type: ignore[index]
+        dry_run = params["dry_run"]  # type: ignore[index]
+        format_hint = params["format_hint"]
+        workers = params["workers"]  # type: ignore[index]
 
         input_dir = Path(variant.data_dir)
         output_root = ensure_dir(context.artifacts_dir / "defenses" / "grayscale" / variant.name)
 
-        images = discover_images(input_dir, patterns)
+        images = self._variant_images.get(variant.name)
+        if images is None:
+            images = discover_images(input_dir, patterns)
         if not images:
             raise FileNotFoundError(f"No images matched the provided extensions in {input_dir}.")
 
-        if self._progress is None:
-            self._progress = Progress(total=len(images), description="Grayscale conversion", unit="images")
-        else:
-            self._progress.add_total(len(images))
         progress = self._progress
+        if progress is None:
+            progress = Progress(total=len(images), description="Grayscale conversion", unit="images")
+            self._progress = progress
 
         task = functools.partial(
             convert_to_grayscale,
@@ -163,6 +205,7 @@ class GrayscaleDefense(Defense):
         if self._progress is not None:
             self._progress.close()
             self._progress = None
+        self._variant_images.clear()
 
 
 __all__ = ["GrayscaleDefense"]

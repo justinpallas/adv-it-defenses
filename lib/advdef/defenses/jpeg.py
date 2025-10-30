@@ -73,37 +73,80 @@ class JPEGDefense(Defense):
         super().__init__(config)
         self._settings_reported = False
         self._progress: Progress | None = None
+        self._variant_images: dict[str, list[Path]] = {}
+        self._params_cache: dict[str, object] | None = None
 
-    def run(self, context: RunContext, variant: DatasetVariant) -> DatasetVariant:
-        params = self.config.params
-        patterns = params.get("extensions", ("*.png", "*.jpg", "*.jpeg", "*.bmp"))
-        quality = int(params.get("quality", 75))
-        progressive = bool(params.get("progressive", False))
-        optimize = bool(params.get("optimize", False))
-        overwrite = bool(params.get("overwrite", True))
-        dry_run = bool(params.get("dry_run", False))
-        workers = int(params.get("workers", max(1, (os.cpu_count() or 2) - 1)))
+    def _get_params(self) -> dict[str, object]:
+        if self._params_cache is None:
+            params = self.config.params
+            patterns = tuple(params.get("extensions", ("*.png", "*.jpg", "*.jpeg", "*.bmp")))
+            quality = int(params.get("quality", 75))
+            progressive = bool(params.get("progressive", False))
+            optimize = bool(params.get("optimize", False))
+            overwrite = bool(params.get("overwrite", True))
+            dry_run = bool(params.get("dry_run", False))
+            workers = int(params.get("workers", max(1, (os.cpu_count() or 2) - 1)))
+
+            self._params_cache = {
+                "patterns": patterns,
+                "quality": quality,
+                "progressive": progressive,
+                "optimize": optimize,
+                "overwrite": overwrite,
+                "dry_run": dry_run,
+                "workers": workers,
+            }
+        return self._params_cache
+
+    def initialize(self, context: RunContext, variants: list[DatasetVariant]) -> None:
+        params = self._get_params()
+        patterns = params["patterns"]  # type: ignore[index]
+
+        self._variant_images = {}
+        total_images = 0
+        for variant in variants:
+            input_dir = Path(variant.data_dir)
+            images = discover_images(input_dir, patterns)
+            if not images:
+                raise FileNotFoundError(f"No images matched the provided extensions in {input_dir}.")
+            self._variant_images[variant.name] = images
+            total_images += len(images)
 
         if not self._settings_reported:
             print(
                 "[info] JPEG defense settings: "
-                f"quality={quality}, progressive={progressive}, optimize={optimize}, "
-                f"overwrite={overwrite}, dry_run={dry_run}, workers={workers}"
+                f"quality={params['quality']}, progressive={params['progressive']}, optimize={params['optimize']}, "
+                f"overwrite={params['overwrite']}, dry_run={params['dry_run']}, workers={params['workers']}"
             )
             self._settings_reported = True
+
+        if self._progress is not None:
+            self._progress.close()
+        self._progress = Progress(total=total_images, description="JPEG compression", unit="images")
+
+    def run(self, context: RunContext, variant: DatasetVariant) -> DatasetVariant:
+        params = self._get_params()
+        patterns = params["patterns"]  # type: ignore[index]
+        quality = params["quality"]  # type: ignore[index]
+        progressive = params["progressive"]  # type: ignore[index]
+        optimize = params["optimize"]  # type: ignore[index]
+        overwrite = params["overwrite"]  # type: ignore[index]
+        dry_run = params["dry_run"]  # type: ignore[index]
+        workers = params["workers"]  # type: ignore[index]
 
         input_dir = Path(variant.data_dir)
         output_root = ensure_dir(context.artifacts_dir / "defenses" / "jpeg" / variant.name)
 
-        images = discover_images(input_dir, patterns)
+        images = self._variant_images.get(variant.name)
+        if images is None:
+            images = discover_images(input_dir, patterns)
         if not images:
             raise FileNotFoundError(f"No images matched the provided extensions in {input_dir}.")
 
-        if self._progress is None:
-            self._progress = Progress(total=len(images), description="JPEG compression", unit="images")
-        else:
-            self._progress.add_total(len(images))
         progress = self._progress
+        if progress is None:
+            progress = Progress(total=len(images), description="JPEG compression", unit="images")
+            self._progress = progress
 
         task = functools.partial(
             compress_image,
@@ -153,6 +196,7 @@ class JPEGDefense(Defense):
         if self._progress is not None:
             self._progress.close()
             self._progress = None
+        self._variant_images.clear()
 
 
 __all__ = ["JPEGDefense"]
