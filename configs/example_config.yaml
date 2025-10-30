@@ -42,7 +42,7 @@ defenses:
       iterations: 500
       kernels: 2000
       file_name_prefix: rsmoe
-  - type: jpeg-compression
+  - type: jpeg
     name: jpeg_compression_quality_75
     params:
       quality: 75
