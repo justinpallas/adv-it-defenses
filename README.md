@@ -1,8 +1,6 @@
 # 🧰 Adversarial Defense Experiment Toolkit
 
-This repository reorganises the earlier collection of standalone evaluation scripts into a
-modular Python package named `advdef`. It provides a reproducible experiment pipeline
-for benchmarking adversarial attacks, defenses, and classifiers on ImageNet-like data.
+The Adversarial Defense Experiment Toolkit is a modular framework for testing different input transformation defenses against adversarial attacks on image classification models. It supports configuring experiments via YAML files, running them through a command-line interface, and logging results for analysis.
 
 ## 🔧 Features
 
