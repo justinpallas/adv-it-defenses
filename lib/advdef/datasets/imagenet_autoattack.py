@@ -22,7 +22,7 @@ from advdef.config import DatasetConfig
 from advdef.core.context import RunContext
 from advdef.core.pipeline import DatasetArtifacts, DatasetBuilder
 from advdef.core.registry import register_dataset
-from advdef.utils import ensure_dir
+from advdef.utils import Progress, ensure_dir
 
 ImageFile.LOAD_TRUNCATED_IMAGES = True
 
@@ -102,51 +102,54 @@ def collect_samples(
     skipped_missing_gt = 0
     skipped_mismatch = 0
 
-    for path in candidates:
-        try:
-            image_tensor = load_image(path, transform)
-        except Exception as exc:
-            print(f"[warn] Skipping {path}: {exc}")
-            continue
-
-        with torch.no_grad():
-            logits = model(image_tensor.unsqueeze(0).to(device))
-            probabilities = logits.softmax(dim=1)
-            confidence, label = probabilities.max(dim=1)
-
-        if confidence.item() < min_confidence:
-            skipped_low_conf += 1
-            continue
-
-        target_label: Optional[int] = None
-        if ground_truth is not None:
-            filename = path.name
-            for variant in {filename, filename.lower(), filename.upper()}:
-                target_label = ground_truth.get(variant)
-                if target_label is not None:
-                    break
-
-        predicted_label = int(label.item())
-
-        if require_correct:
-            if target_label is None:
-                skipped_missing_gt += 1
-                continue
-            if predicted_label != target_label:
-                skipped_mismatch += 1
+    with Progress(total=count, description="Selecting baselines", unit="samples") as progress:
+        for path in candidates:
+            try:
+                image_tensor = load_image(path, transform)
+            except Exception as exc:
+                print(f"[warn] Skipping {path}: {exc}")
                 continue
 
-        infos.append(
-            SampleInfo(
-                path=path,
-                predicted_label=predicted_label,
-                confidence=confidence.item(),
-                target_label=target_label,
+            with torch.no_grad():
+                logits = model(image_tensor.unsqueeze(0).to(device))
+                probabilities = logits.softmax(dim=1)
+                confidence, label = probabilities.max(dim=1)
+
+            if confidence.item() < min_confidence:
+                skipped_low_conf += 1
+                continue
+
+            target_label: Optional[int] = None
+            if ground_truth is not None:
+                filename = path.name
+                for variant in {filename, filename.lower(), filename.upper()}:
+                    target_label = ground_truth.get(variant)
+                    if target_label is not None:
+                        break
+
+            predicted_label = int(label.item())
+
+            if require_correct:
+                if target_label is None:
+                    skipped_missing_gt += 1
+                    continue
+                if predicted_label != target_label:
+                    skipped_mismatch += 1
+                    continue
+
+            infos.append(
+                SampleInfo(
+                    path=path,
+                    predicted_label=predicted_label,
+                    confidence=confidence.item(),
+                    target_label=target_label,
+                )
             )
-        )
 
-        if len(infos) == count:
-            break
+            progress.update()
+
+            if len(infos) == count:
+                break
 
     if len(infos) < count:
         raise RuntimeError(
@@ -173,6 +176,7 @@ def save_images(
     destinations: Sequence[Path],
     *,
     description: str,
+    progress: Progress | None = None,
 ) -> None:
     to_pil = transforms.ToPILImage()
     total = len(destinations)
@@ -181,7 +185,9 @@ def save_images(
     for tensor, out_path in zip(batch, destinations):
         out_path.parent.mkdir(parents=True, exist_ok=True)
         to_pil(tensor.detach().cpu().clamp(0.0, 1.0)).save(out_path)
-    if total:
+        if progress is not None:
+            progress.update()
+    if total and progress is None:
         target_dir = destinations[0].parent
         print(f"[info] Saved {total} {description} images to {target_dir}")
 
@@ -343,19 +349,23 @@ class ImageNetAutoAttackBuilder(DatasetBuilder):
 
         recorded_hw: Optional[tuple[int, int]] = None
 
-        for batch_idx, (start, end, batch_infos) in enumerate(iter_batches(sample_infos, batch_size), start=1):
-            tensors = [load_image(info.path, transform) for info in batch_infos]
-            batch_tensor = torch.stack(tensors, dim=0)
+        with Progress(total=len(sample_infos), description="Saving baselines", unit="images") as progress:
+            for batch_idx, (start, end, batch_infos) in enumerate(
+                iter_batches(sample_infos, batch_size), start=1
+            ):
+                tensors = [load_image(info.path, transform) for info in batch_infos]
+                batch_tensor = torch.stack(tensors, dim=0)
 
-            if recorded_hw is None and batch_tensor.numel() > 0:
-                _, _, height, width = batch_tensor.shape
-                recorded_hw = (height, width)
+                if recorded_hw is None and batch_tensor.numel() > 0:
+                    _, _, height, width = batch_tensor.shape
+                    recorded_hw = (height, width)
 
-            save_images(
-                batch_tensor,
-                baseline_paths[start:end],
-                description=f"baseline batch {batch_idx}",
-            )
+                save_images(
+                    batch_tensor,
+                    baseline_paths[start:end],
+                    description=f"baseline batch {batch_idx}",
+                    progress=progress,
+                )
 
         if manifest_path:
             manifest_file = Path(manifest_path)

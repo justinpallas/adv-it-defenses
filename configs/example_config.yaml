@@ -1,7 +1,7 @@
-name: resnet50_autoattack_r_smoe
+name: example_experiment
 description: >
-  Sample experiment generating adversarial samples with AutoAttack, reconstructing
-  them via R-SMOE, and evaluating a ResNet-50 classifier.
+  Sample experiment generating adversarial samples with AutoAttack, applying the R-SMoE and JPEG Compression defenses,
+  and evaluating a ResNet-50 classifier.
 seed: 123
 work_dir: runs
 dataset:
@@ -42,6 +42,14 @@ defenses:
       iterations: 500
       kernels: 2000
       file_name_prefix: rsmoe
+  - type: jpeg-compression
+    name: jpeg_compression_quality_75
+    params:
+      quality: 75
+  - type: grayscale
+    name: grayscale_default
+    params:
+      replicate_rgb: true
 evaluation:
   type: imagenet
   params:

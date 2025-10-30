@@ -18,7 +18,7 @@ from advdef.config import DefenseConfig
 from advdef.core.context import RunContext
 from advdef.core.pipeline import DatasetVariant, Defense
 from advdef.core.registry import register_defense
-from advdef.utils import ensure_dir
+from advdef.utils import Progress, ensure_dir
 
 DEFAULT_IMAGE_FILENAME = "0000001.png"
 DEFAULT_CAMERA_ID = 1
@@ -164,25 +164,27 @@ def prepare_dataset(
     output_root.mkdir(parents=True, exist_ok=True)
     prepared_dirs: List[Path] = []
 
-    for image_path in images:
-        scene_dir = output_root / image_path.stem
-        images_dir = scene_dir / "images"
-        sparse_dir = scene_dir / "sparse"
-        ensure_empty_directory(scene_dir, overwrite=overwrite)
-        images_dir.mkdir(parents=True, exist_ok=True)
-        sparse_dir.mkdir(parents=True, exist_ok=True)
+    with Progress(total=len(images), description="Preparing R-SMOE inputs", unit="images") as progress:
+        for image_path in images:
+            scene_dir = output_root / image_path.stem
+            images_dir = scene_dir / "images"
+            sparse_dir = scene_dir / "sparse"
+            ensure_empty_directory(scene_dir, overwrite=overwrite)
+            images_dir.mkdir(parents=True, exist_ok=True)
+            sparse_dir.mkdir(parents=True, exist_ok=True)
 
-        destination = images_dir / image_filename
-        logging.info("Copying %s -> %s", image_path, destination)
-        copy_image(image_path, destination, convert=convert_to_png_flag)
-        for alt_name in SECONDARY_IMAGE_FILENAMES:
-            alt_path = images_dir / alt_name
-            if alt_path.name != destination.name:
-                shutil.copy2(destination, alt_path)
+            destination = images_dir / image_filename
+            logging.debug("Copying %s -> %s", image_path, destination)
+            copy_image(image_path, destination, convert=convert_to_png_flag)
+            for alt_name in SECONDARY_IMAGE_FILENAMES:
+                alt_path = images_dir / alt_name
+                if alt_path.name != destination.name:
+                    shutil.copy2(destination, alt_path)
 
-        width, height = get_image_size(destination)
-        write_sparse_stub(sparse_dir, image_filename, width, height)
-        prepared_dirs.append(scene_dir)
+            width, height = get_image_size(destination)
+            write_sparse_stub(sparse_dir, image_filename, width, height)
+            prepared_dirs.append(scene_dir)
+            progress.update()
 
     return prepared_dirs
 
@@ -298,6 +300,20 @@ class RSMoEDefense(Defense):
         if not train_script.exists():
             raise FileNotFoundError(f"Training script not found: {train_script}")
 
+        logging.info(
+            "R-SMOE settings: root=%s mode=%s iterations=%s npcs=%s n_multi_model=%s "
+            "skip_existing=%s file_prefix=%s extra_args=%s train_script=%s",
+            r_smoe_root,
+            mode,
+            iterations,
+            npcs,
+            n_multi_model,
+            skip_existing,
+            file_name_prefix,
+            " ".join(extra_args_list) if extra_args_list else "<none>",
+            train_script,
+        )
+
         variant_root = ensure_dir(context.artifacts_dir / "defenses" / "r-smoe" / variant.name)
         prepared_root = ensure_dir(variant_root / "prepared")
         models_root = ensure_dir(variant_root / "models")
@@ -316,52 +332,55 @@ class RSMoEDefense(Defense):
 
         results: List[Path] = []
 
-        for dataset_dir in prepared_datasets:
-            image_name = dataset_dir.name
-            dest_image = recon_root / f"{image_name}.png"
-            if skip_existing and dest_image.exists():
-                logging.info("Skipping %s (reconstruction already exists).", image_name)
+        with Progress(total=len(prepared_datasets), description="R-SMOE reconstruction", unit="images") as progress:
+            for dataset_dir in prepared_datasets:
+                image_name = dataset_dir.name
+                dest_image = recon_root / f"{image_name}.png"
+                if skip_existing and dest_image.exists():
+                    logging.debug("Skipping %s (reconstruction already exists).", image_name)
+                    results.append(dest_image)
+                    progress.update()
+                    continue
+
+                model_dir = models_root / image_name
+                ensure_dir(model_dir)
+                file_name = f"{file_name_prefix}_{image_name}"
+
+                if mode == "denoise":
+                    ensure_denoise_layout(model_dir, iterations)
+
+                # Mirror dataset inside R-SMOE data/ to satisfy relative path expectations
+                rsmoe_data_root = ensure_dir(r_smoe_root / "data")
+                symlink_dir = rsmoe_data_root / image_name
+                dataset_dir_abs = dataset_dir.resolve()
+                if symlink_dir.exists() or symlink_dir.is_symlink():
+                    if symlink_dir.is_symlink():
+                        symlink_dir.unlink()
+                    else:
+                        shutil.rmtree(symlink_dir)
+                try:
+                    symlink_dir.symlink_to(dataset_dir_abs, target_is_directory=True)
+                except OSError:
+                    # Fallback: copy tree if symlink unsupported
+                    shutil.copytree(dataset_dir_abs, symlink_dir)
+
+                logging.debug("R-SMOE processing %s", image_name)
+                run_training(
+                    train_script=train_script,
+                    dataset_dir=dataset_dir_abs,
+                    model_dir=model_dir,
+                    iterations=iterations,
+                    npcs=npcs,
+                    file_name=file_name,
+                    extra_args=extra_args_seq,
+                    working_dir=r_smoe_root,
+                )
+
+                render_path = find_render(model_dir)
+                logging.debug("Copying %s -> %s", render_path, dest_image)
+                shutil.copy2(render_path, dest_image)
                 results.append(dest_image)
-                continue
-
-            model_dir = models_root / image_name
-            ensure_dir(model_dir)
-            file_name = f"{file_name_prefix}_{image_name}"
-
-            if mode == "denoise":
-                ensure_denoise_layout(model_dir, iterations)
-
-            # Mirror dataset inside R-SMOE data/ to satisfy relative path expectations
-            rsmoe_data_root = ensure_dir(r_smoe_root / "data")
-            symlink_dir = rsmoe_data_root / image_name
-            dataset_dir_abs = dataset_dir.resolve()
-            if symlink_dir.exists() or symlink_dir.is_symlink():
-                if symlink_dir.is_symlink():
-                    symlink_dir.unlink()
-                else:
-                    shutil.rmtree(symlink_dir)
-            try:
-                symlink_dir.symlink_to(dataset_dir_abs, target_is_directory=True)
-            except OSError:
-                # Fallback: copy tree if symlink unsupported
-                shutil.copytree(dataset_dir_abs, symlink_dir)
-
-            logging.info("R-SMOE processing %s", image_name)
-            run_training(
-                train_script=train_script,
-                dataset_dir=dataset_dir_abs,
-                model_dir=model_dir,
-                iterations=iterations,
-                npcs=npcs,
-                file_name=file_name,
-                extra_args=extra_args_seq,
-                working_dir=r_smoe_root,
-            )
-
-            render_path = find_render(model_dir)
-            logging.info("Copying %s -> %s", render_path, dest_image)
-            shutil.copy2(render_path, dest_image)
-            results.append(dest_image)
+                progress.update()
 
         metadata = {
             "defense": "r-smoe",
@@ -384,6 +403,7 @@ class RSMoEDefense(Defense):
 
 
 __all__ = ["RSMoEDefense"]
+
 def _ensure_dependencies() -> None:
     missing: List[str] = []
     dependency_hints = {

@@ -1,4 +1,4 @@
-"""JPEG recompression defense."""
+"""Grayscale conversion defense."""
 
 from __future__ import annotations
 
@@ -26,19 +26,22 @@ def discover_images(root: Path, patterns: Sequence[str]) -> list[Path]:
     return sorted(paths)
 
 
-def compress_image(
+def convert_to_grayscale(
     src: Path,
     *,
     input_root: Path,
     output_root: Path,
-    quality: int,
-    progressive: bool,
-    optimize: bool,
+    mode: str,
+    replicate_rgb: bool,
     overwrite: bool,
     dry_run: bool,
+    format_hint: str | None,
 ) -> tuple[str, str]:
     relative = src.relative_to(input_root)
-    destination = (output_root / relative).with_suffix(".jpg")
+    destination = output_root / relative
+
+    if format_hint:
+        destination = destination.with_suffix(f".{format_hint.lower()}")
 
     if not overwrite and destination.exists():
         return "skipped", destination.as_posix()
@@ -50,24 +53,26 @@ def compress_image(
 
     try:
         with Image.open(src) as img:
-            if img.mode not in ("RGB", "L"):
-                img = img.convert("RGB")
-            save_kwargs = {
-                "format": "JPEG",
-                "quality": max(1, min(95, quality)),
-                "optimize": optimize,
-                "progressive": progressive,
-            }
-            img.save(destination, **save_kwargs)
+            transformed = img.convert(mode)
+            if replicate_rgb and mode != "RGB":
+                transformed = transformed.convert("RGB")
+
+            save_kwargs = {}
+            if format_hint:
+                save_kwargs["format"] = format_hint.upper()
+            elif img.format:
+                save_kwargs["format"] = img.format
+
+            transformed.save(destination, **save_kwargs)
     except Exception as exc:  # pragma: no cover - file system dependent
         return f"failed: {exc}", destination.as_posix()
 
     return "written", destination.as_posix()
 
 
-@register_defense("jpeg")
-class JPEGDefense(Defense):
-    """Re-encode images with JPEG compression."""
+@register_defense("grayscale")
+class GrayscaleDefense(Defense):
+    """Convert images to grayscale."""
 
     def __init__(self, config: DefenseConfig) -> None:
         super().__init__(config)
@@ -75,40 +80,44 @@ class JPEGDefense(Defense):
     def run(self, context: RunContext, variant: DatasetVariant) -> DatasetVariant:
         params = self.config.params
         patterns = params.get("extensions", ("*.png", "*.jpg", "*.jpeg", "*.bmp"))
-        quality = int(params.get("quality", 75))
-        progressive = bool(params.get("progressive", False))
-        optimize = bool(params.get("optimize", False))
+        mode = str(params.get("mode", "L")).upper()
+        replicate_rgb = bool(params.get("replicate_rgb", False))
         overwrite = bool(params.get("overwrite", True))
         dry_run = bool(params.get("dry_run", False))
+        format_hint = params.get("format")
         workers = int(params.get("workers", max(1, (os.cpu_count() or 2) - 1)))
 
+        if replicate_rgb and mode == "RGB":
+            # No need to re-run conversion when already targeting RGB.
+            replicate_rgb = False
+
         print(
-            "[info] JPEG defense settings: "
-            f"quality={quality}, progressive={progressive}, optimize={optimize}, "
+            "[info] Grayscale defense settings: "
+            f"mode={mode}, replicate_rgb={replicate_rgb}, format={format_hint}, "
             f"overwrite={overwrite}, dry_run={dry_run}, workers={workers}"
         )
 
         input_dir = Path(variant.data_dir)
-        output_root = ensure_dir(context.artifacts_dir / "defenses" / "jpeg" / variant.name)
+        output_root = ensure_dir(context.artifacts_dir / "defenses" / "grayscale" / variant.name)
 
         images = discover_images(input_dir, patterns)
         if not images:
             raise FileNotFoundError(f"No images matched the provided extensions in {input_dir}.")
 
         task = functools.partial(
-            compress_image,
+            convert_to_grayscale,
             input_root=input_dir,
             output_root=output_root,
-            quality=quality,
-            progressive=progressive,
-            optimize=optimize,
+            mode=mode,
+            replicate_rgb=replicate_rgb,
             overwrite=overwrite,
             dry_run=dry_run,
+            format_hint=format_hint,
         )
 
         written = skipped = failed = 0
 
-        with Progress(total=len(images), description="JPEG compression", unit="images") as progress:
+        with Progress(total=len(images), description="Grayscale conversion", unit="images") as progress:
             with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as executor:
                 for status, path in executor.map(task, images):
                     if status == "written":
@@ -119,26 +128,27 @@ class JPEGDefense(Defense):
                         print(f"[dry-run] would write {path}")
                     else:
                         failed += 1
-                        print(f"[warn] Failed to compress {path}: {status}")
+                        print(f"[warn] Failed to convert {path}: {status}")
                     progress.update()
 
         metadata = {
-            "defense": "jpeg",
-            "quality": quality,
-            "progressive": progressive,
-            "optimize": optimize,
+            "defense": "grayscale",
+            "mode": mode,
+            "replicate_rgb": replicate_rgb,
             "written": written,
             "skipped": skipped,
             "failed": failed,
             "source_variant": variant.name,
         }
+        if format_hint:
+            metadata["format"] = format_hint
 
         return DatasetVariant(
-            name=f"{variant.name}-jpeg",
+            name=f"{variant.name}-grayscale",
             data_dir=str(output_root),
             parent=variant.name,
             metadata=metadata,
         )
 
 
-__all__ = ["JPEGDefense"]
+__all__ = ["GrayscaleDefense"]

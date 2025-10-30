@@ -12,7 +12,7 @@ for benchmarking adversarial attacks, defenses, and classifiers on ImageNet-like
   - `core/` – pipeline execution, registries, run context, CLI helpers.
   - `datasets/` – dataset preparation utilities (e.g. ImageNet sampling).
   - `attacks/` – adversarial attack implementations (AutoAttack).
-  - `defenses/` – first-party defenses (e.g. JPEG recompression, R-SMOE pipeline wrapper).
+  - `defenses/` – first-party defenses (e.g. grayscale conversion, JPEG recompression, R-SMOE pipeline wrapper).
   - `inference/` – inference backends (timm models).
   - `evaluation/` – metric computation (ImageNet accuracies).
   - `utils/` – filesystem, serialisation, time, and environment helpers.
