@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import time
 from pathlib import Path
 from typing import Iterable, List, Sequence
@@ -21,7 +22,7 @@ from advdef.datasets.imagenet_autoattack import (
     save_images,
     write_manifest,
 )
-from advdef.utils import ensure_dir
+from advdef.utils import Progress, ensure_dir
 
 try:
     from pyautoattack import AutoAttack
@@ -193,38 +194,47 @@ class AutoAttackAttack(Attack):
 
             print(f"[info] Starting {display} attack on {len(samples)} samples.")
 
-            for batch_idx, (start, end, batch_infos) in enumerate(iter_batches(samples, batch_size), start=1):
-                batch_tensor, batch_labels = load_batch(batch_infos)
-                batch_tensor_device = batch_tensor.to(device)
-                batch_labels_tensor = torch.tensor(batch_labels, dtype=torch.long, device=device)
+            with Progress(total=len(samples), description=f"{display} attack", unit="images") as progress:
+                for batch_idx, (start, end, batch_infos) in enumerate(
+                    iter_batches(samples, batch_size), start=1
+                ):
+                    batch_tensor, batch_labels = load_batch(batch_infos)
+                    batch_tensor_device = batch_tensor.to(device)
+                    batch_labels_tensor = torch.tensor(batch_labels, dtype=torch.long, device=device)
 
-                chunk_begin = time.monotonic()
-                adv = run_attack(
-                    display,
-                    attack_key,
-                    normalized_model,
-                    batch_tensor_device,
-                    batch_labels_tensor,
-                    batch_size=len(batch_infos),
-                    eps=eps,
-                    norm=norm,
-                    seed=seed_base + seed_offset,
-                    device=device,
-                    verbose=verbose,
-                )
-                elapsed = time.monotonic() - chunk_begin
-                print(
-                    f"[info] {display} batch {batch_idx}: samples {start}-{end - 1} finished in {elapsed:.1f}s"
-                )
+                    chunk_begin = time.monotonic()
+                    adv = run_attack(
+                        display,
+                        attack_key,
+                        normalized_model,
+                        batch_tensor_device,
+                        batch_labels_tensor,
+                        batch_size=len(batch_infos),
+                        eps=eps,
+                        norm=norm,
+                        seed=seed_base + seed_offset,
+                        device=device,
+                        verbose=verbose,
+                    )
+                    elapsed = time.monotonic() - chunk_begin
+                    logging.debug(
+                        "%s batch %s (%s-%s) finished in %.1fs",
+                        display,
+                        batch_idx,
+                        start,
+                        end - 1,
+                        elapsed,
+                    )
 
-                save_images(
-                    adv,
-                    outputs[start:end],
-                    description=f"{display} batch {batch_idx}",
-                )
+                    save_images(
+                        adv,
+                        outputs[start:end],
+                        description=f"{display} batch {batch_idx}",
+                        progress=progress,
+                    )
 
-                if device.type == "cuda":
-                    torch.cuda.empty_cache()
+                    if device.type == "cuda":
+                        torch.cuda.empty_cache()
 
             write_manifest(manifest_path, samples, outputs)
 

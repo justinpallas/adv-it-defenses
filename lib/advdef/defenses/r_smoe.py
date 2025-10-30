@@ -228,10 +228,13 @@ def run_training(
     file_name: str,
     extra_args: Optional[Sequence[str]],
     working_dir: Path,
+    log_path: Path,
 ) -> None:
     script_path = train_script.resolve()
     dataset_dir = dataset_dir.resolve()
     model_dir = model_dir.resolve()
+    log_path = log_path.resolve()
+    log_path.parent.mkdir(parents=True, exist_ok=True)
 
     cmd: List[str] = [
         sys.executable,
@@ -251,9 +254,28 @@ def run_training(
     if extra_args:
         cmd.extend(extra_args)
 
-    logging.info("Running: %s", " ".join(cmd))
+    logging.debug("Running: %s", " ".join(cmd))
     ensure_dir(working_dir / "all_result")
-    subprocess.run(cmd, check=True, cwd=str(working_dir))
+    with log_path.open("w", encoding="utf-8") as log_file:
+        result = subprocess.run(
+            cmd,
+            cwd=str(working_dir),
+            stdout=log_file,
+            stderr=subprocess.STDOUT,
+            check=False,
+        )
+    if result.returncode != 0:
+        tail = []
+        try:
+            lines = log_path.read_text(encoding="utf-8", errors="replace").splitlines()
+            tail = lines[-20:]
+        except Exception:  # pragma: no cover - best effort
+            tail = ["<unable to read log file>"]
+        raise RuntimeError(
+            "R-SMOE training failed with exit code "
+            f"{result.returncode}. See {log_path} for details.\n"
+            + "\n".join(tail)
+        )
 
 
 @register_defense("r-smoe")
@@ -365,6 +387,8 @@ class RSMoEDefense(Defense):
                     shutil.copytree(dataset_dir_abs, symlink_dir)
 
                 logging.debug("R-SMOE processing %s", image_name)
+                log_path = model_dir / "rsmoe.log"
+                logging.info("R-SMOE processing %s (log: %s)", image_name, log_path)
                 run_training(
                     train_script=train_script,
                     dataset_dir=dataset_dir_abs,
@@ -374,6 +398,7 @@ class RSMoEDefense(Defense):
                     file_name=file_name,
                     extra_args=extra_args_seq,
                     working_dir=r_smoe_root,
+                    log_path=log_path,
                 )
 
                 render_path = find_render(model_dir)
