@@ -1,27 +1,26 @@
-# Adversarial Defense Experiment Toolkit
+# 🧰 Adversarial Defense Experiment Toolkit
 
 This repository reorganises the earlier collection of standalone evaluation scripts into a
 modular Python package named `advdef`. It provides a reproducible experiment pipeline
 for benchmarking adversarial attacks, defenses, and classifiers on ImageNet-like data.
 
-## Layout
+## 🔧 Features
 
-- `pyproject.toml` – package metadata and dependencies.
-- `lib/advdef/` – Python package sources.
-  - `config/` – Pydantic models describing experiment, dataset, attack, defense, model, inference and evaluation settings.
-  - `core/` – pipeline execution, registries, run context, CLI helpers.
-  - `datasets/` – dataset preparation utilities (e.g. ImageNet sampling).
-  - `attacks/` – adversarial attack implementations (AutoAttack).
-  - `defenses/` – first-party defenses (e.g. grayscale conversion, JPEG recompression, R-SMOE pipeline wrapper).
-  - `inference/` – inference backends (timm models).
-  - `evaluation/` – metric computation (ImageNet accuracies).
-  - `utils/` – filesystem, serialisation, time, and environment helpers.
-- `external/r-smoe/` – git submodule containing the vendor R-SMOE implementation consumed by the defense.
-- `configs/` – example experiment YAML files.
-  - `queues/` – queue definitions for batching multiple experiments.
-- `old scripts/` – original one-off scripts preserved for reference.
+- Modular components for datasets, attacks, defenses, inference, and evaluation.
+- YAML-based experiment configuration with Pydantic validation.
+- Command-line interface for running experiments and queues.
 
-## Installation
+### ⚔️ Available Attacks
+
+- AutoAttack Suite
+
+### 🛡️ Available Defenses
+
+- SMoE (Steered Mixture-of-Experts)
+- JPEG Compression
+- Grayscale Conversion
+
+## 🖥️ Installation
 
 Create and activate a Python 3.10+ environment, then install the toolkit in editable mode:
 
@@ -45,7 +44,7 @@ If you prefer, you can follow the upstream instructions instead and create the
 command above captures the minimal additional packages required when reusing the
 environment created for this toolkit.
 
-## Running an Experiment
+## 🧪 Running an Experiment
 
 Configure an experiment by editing a YAML file (see `configs/resnet50_autoattack.yaml`).
 By default the ImageNet dataset builder downloads the validation split into
@@ -65,7 +64,7 @@ When you already have the validation set/devkit stored elsewhere, pass
 Artifacts, metrics, configuration snapshots, and logs are stored in
 `runs/<timestamp>_<slug>/`.
 
-## Queueing Multiple Experiments
+### ⏳ Queueing Multiple Experiments
 
 Queue files describe a list of experiments (with optional overrides). Execute:
 
@@ -76,14 +75,7 @@ advdef queue configs/queues/sample_queue.yaml
 Each job resolves its referenced config, applies overrides, and runs sequentially
 by default.
 
-## Extending
+## 🙏 Acknowledgements
 
-- **Datasets / Attacks / Defenses / Inference / Evaluation**: implement a class
-  that inherits from the corresponding base in `advdef.core.pipeline`, decorate it with
-  `@register_*`, and expose the module in its package `__init__.py`.
-- **Configuration**: define new parameters in the relevant Pydantic models under `advdef.config`.
-- **CLI**: additional commands can be added to `advdef.cli`.
-
-Refer to the existing implementations (AutoAttack dataset + attack, R-SMOE defense,
-Timm inference, ImageNet evaluation) for concrete patterns. The registries allow
-dynamically referencing components via their `type` string in experiment configs.
+This project uses Yi-Hsin Li's R-SMoE implementation for the SMoE defense component.
+The original repository is available at: https://github.com/yihsinli/r-smoe
