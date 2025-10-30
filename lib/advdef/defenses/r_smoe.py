@@ -322,18 +322,13 @@ class RSMoEDefense(Defense):
         if not train_script.exists():
             raise FileNotFoundError(f"Training script not found: {train_script}")
 
-        logging.info(
-            "R-SMOE settings: root=%s mode=%s iterations=%s npcs=%s n_multi_model=%s "
-            "skip_existing=%s file_prefix=%s extra_args=%s train_script=%s",
-            r_smoe_root,
-            mode,
-            iterations,
-            npcs,
-            n_multi_model,
-            skip_existing,
-            file_name_prefix,
-            " ".join(extra_args_list) if extra_args_list else "<none>",
-            train_script,
+        extra_args_display = " ".join(extra_args_list) if extra_args_list else "<none>"
+        print(
+            "[info] R-SMOE settings: "
+            f"root={r_smoe_root} mode={mode} iterations={iterations} npcs={npcs} "
+            f"n_multi_model={n_multi_model} skip_existing={skip_existing} "
+            f"file_prefix={file_name_prefix} extra_args={extra_args_display} "
+            f"train_script={train_script}"
         )
 
         variant_root = ensure_dir(context.artifacts_dir / "defenses" / "r-smoe" / variant.name)

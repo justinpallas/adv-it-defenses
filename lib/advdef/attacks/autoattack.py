@@ -232,6 +232,7 @@ class AutoAttackAttack(Attack):
                         description=f"{display} batch {batch_idx}",
                         progress=progress,
                     )
+                    progress.refresh()
 
                     if device.type == "cuda":
                         torch.cuda.empty_cache()

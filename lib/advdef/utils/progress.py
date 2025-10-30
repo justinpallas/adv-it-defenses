@@ -87,6 +87,12 @@ class Progress:
         self._last_line_len = 0
         self._closed = True
 
+    def refresh(self) -> None:
+        """Force a redraw of the progress bar."""
+        if self._closed:
+            return
+        self._render(force=True)
+
     def _render(self, *, force: bool = False) -> None:
         now = time.monotonic()
         if not force and (now - self._last_render) < self._min_interval:
