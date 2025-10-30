@@ -71,6 +71,7 @@ class JPEGDefense(Defense):
 
     def __init__(self, config: DefenseConfig) -> None:
         super().__init__(config)
+        self._settings_reported = False
 
     def run(self, context: RunContext, variant: DatasetVariant) -> DatasetVariant:
         params = self.config.params
@@ -82,11 +83,13 @@ class JPEGDefense(Defense):
         dry_run = bool(params.get("dry_run", False))
         workers = int(params.get("workers", max(1, (os.cpu_count() or 2) - 1)))
 
-        print(
-            "[info] JPEG defense settings: "
-            f"quality={quality}, progressive={progressive}, optimize={optimize}, "
-            f"overwrite={overwrite}, dry_run={dry_run}, workers={workers}"
-        )
+        if not getattr(self, "_settings_reported", False):
+            print(
+                "[info] JPEG defense settings: "
+                f"quality={quality}, progressive={progressive}, optimize={optimize}, "
+                f"overwrite={overwrite}, dry_run={dry_run}, workers={workers}"
+            )
+            self._settings_reported = True
 
         input_dir = Path(variant.data_dir)
         output_root = ensure_dir(context.artifacts_dir / "defenses" / "jpeg" / variant.name)

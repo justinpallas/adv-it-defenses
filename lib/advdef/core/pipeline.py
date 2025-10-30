@@ -158,17 +158,19 @@ class Pipeline:
         return variants
 
     def run_defenses(self, variants: Iterable[DatasetVariant]) -> List[DatasetVariant]:
-        results: List[DatasetVariant] = []
-        for variant in variants:
-            current = variant
-            for defense_cfg in self.config.defenses:
-                if not defense_cfg.enabled:
-                    continue
-                defense_cls = DEFENSES.get(defense_cfg.type)
-                defense: Defense = defense_cls(defense_cfg)
-                current = defense.run(self.context, current)
-            results.append(current)
-        return results
+        base_variants: List[DatasetVariant] = list(variants)
+        defended: List[DatasetVariant] = []
+
+        for defense_cfg in self.config.defenses:
+            if not defense_cfg.enabled:
+                continue
+            defense_cls = DEFENSES.get(defense_cfg.type)
+            defense: Defense = defense_cls(defense_cfg)
+
+            for variant in base_variants:
+                defended.append(defense.run(self.context, variant))
+
+        return defended
 
     def run_inference(self, variants: Iterable[DatasetVariant]) -> List[InferenceResult]:
         inference_cls = INFERENCE_BACKENDS.get(self.config.inference.type)

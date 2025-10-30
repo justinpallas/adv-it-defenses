@@ -284,6 +284,7 @@ class RSMoEDefense(Defense):
 
     def __init__(self, config: DefenseConfig) -> None:
         super().__init__(config)
+        self._settings_reported = False
 
     def run(self, context: RunContext, variant: DatasetVariant) -> DatasetVariant:
         _ensure_dependencies()
@@ -324,15 +325,17 @@ class RSMoEDefense(Defense):
         if not train_script.exists():
             raise FileNotFoundError(f"Training script not found: {train_script}")
 
-        extra_args_display = " ".join(extra_args_list) if extra_args_list else "<none>"
-        n_multi_model_display = n_multi_model if n_multi_model is not None else "<unused>"
-        print(
-            "[info] R-SMOE settings: "
-            f"root={r_smoe_root} mode={mode} iterations={iterations} npcs={npcs} "
-            f"n_multi_model={n_multi_model_display} skip_existing={skip_existing} "
-            f"file_prefix={file_name_prefix} extra_args={extra_args_display} "
-            f"train_script={train_script}"
-        )
+        if not getattr(self, "_settings_reported", False):
+            extra_args_display = " ".join(extra_args_list) if extra_args_list else "<none>"
+            n_multi_model_display = n_multi_model if n_multi_model is not None else "<unused>"
+            print(
+                "[info] R-SMOE settings: "
+                f"root={r_smoe_root} mode={mode} iterations={iterations} npcs={npcs} "
+                f"n_multi_model={n_multi_model_display} skip_existing={skip_existing} "
+                f"file_prefix={file_name_prefix} extra_args={extra_args_display} "
+                f"train_script={train_script}"
+            )
+            self._settings_reported = True
 
         variant_root = ensure_dir(context.artifacts_dir / "defenses" / "r-smoe" / variant.name)
         prepared_root = ensure_dir(variant_root / "prepared")

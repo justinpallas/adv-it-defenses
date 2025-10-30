@@ -76,6 +76,7 @@ class GrayscaleDefense(Defense):
 
     def __init__(self, config: DefenseConfig) -> None:
         super().__init__(config)
+        self._settings_reported = False
 
     def run(self, context: RunContext, variant: DatasetVariant) -> DatasetVariant:
         params = self.config.params
@@ -91,11 +92,13 @@ class GrayscaleDefense(Defense):
             # No need to re-run conversion when already targeting RGB.
             replicate_rgb = False
 
-        print(
-            "[info] Grayscale defense settings: "
-            f"mode={mode}, replicate_rgb={replicate_rgb}, format={format_hint}, "
-            f"overwrite={overwrite}, dry_run={dry_run}, workers={workers}"
-        )
+        if not getattr(self, "_settings_reported", False):
+            print(
+                "[info] Grayscale defense settings: "
+                f"mode={mode}, replicate_rgb={replicate_rgb}, format={format_hint}, "
+                f"overwrite={overwrite}, dry_run={dry_run}, workers={workers}"
+            )
+            self._settings_reported = True
 
         input_dir = Path(variant.data_dir)
         output_root = ensure_dir(context.artifacts_dir / "defenses" / "grayscale" / variant.name)
