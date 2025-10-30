@@ -77,5 +77,6 @@ by default.
 
 ## 🙏 Acknowledgements
 
-This project uses Yi-Hsin Li's R-SMoE implementation for the SMoE defense component.
-The original repository is available at: https://github.com/yihsinli/r-smoe
+This project uses Yi-Hsin Li's R-SMoE implementation for the SMoE defense component
+(https://github.com/yihsinli/r-smoe), included via git submodule and distributed
+under its original Gaussian-Splatting License (`external/r-smoe/LICENSE.md`).
