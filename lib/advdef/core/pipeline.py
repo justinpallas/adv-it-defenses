@@ -170,6 +170,9 @@ class Pipeline:
             for variant in base_variants:
                 defended.append(defense.run(self.context, variant))
 
+            if hasattr(defense, "finalize"):
+                defense.finalize()
+
         return defended
 
     def run_inference(self, variants: Iterable[DatasetVariant]) -> List[InferenceResult]:

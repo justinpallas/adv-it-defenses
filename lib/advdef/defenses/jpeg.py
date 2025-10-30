@@ -72,6 +72,7 @@ class JPEGDefense(Defense):
     def __init__(self, config: DefenseConfig) -> None:
         super().__init__(config)
         self._settings_reported = False
+        self._progress: Progress | None = None
 
     def run(self, context: RunContext, variant: DatasetVariant) -> DatasetVariant:
         params = self.config.params
@@ -83,7 +84,7 @@ class JPEGDefense(Defense):
         dry_run = bool(params.get("dry_run", False))
         workers = int(params.get("workers", max(1, (os.cpu_count() or 2) - 1)))
 
-        if not getattr(self, "_settings_reported", False):
+        if not self._settings_reported:
             print(
                 "[info] JPEG defense settings: "
                 f"quality={quality}, progressive={progressive}, optimize={optimize}, "
@@ -98,6 +99,12 @@ class JPEGDefense(Defense):
         if not images:
             raise FileNotFoundError(f"No images matched the provided extensions in {input_dir}.")
 
+        if self._progress is None:
+            self._progress = Progress(total=len(images), description="JPEG compression", unit="images")
+        else:
+            self._progress.add_total(len(images))
+        progress = self._progress
+
         task = functools.partial(
             compress_image,
             input_root=input_dir,
@@ -111,19 +118,18 @@ class JPEGDefense(Defense):
 
         written = skipped = failed = 0
 
-        with Progress(total=len(images), description="JPEG compression", unit="images") as progress:
-            with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as executor:
-                for status, path in executor.map(task, images):
-                    if status == "written":
-                        written += 1
-                    elif status == "skipped":
-                        skipped += 1
-                    elif status == "dry-run":
-                        print(f"[dry-run] would write {path}")
-                    else:
-                        failed += 1
-                        print(f"[warn] Failed to compress {path}: {status}")
-                    progress.update()
+        with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as executor:
+            for status, path in executor.map(task, images):
+                if status == "written":
+                    written += 1
+                elif status == "skipped":
+                    skipped += 1
+                elif status == "dry-run":
+                    print(f"[dry-run] would write {path}")
+                else:
+                    failed += 1
+                    print(f"[warn] Failed to compress {path}: {status}")
+                progress.update()
 
         metadata = {
             "defense": "jpeg",
@@ -142,6 +148,11 @@ class JPEGDefense(Defense):
             parent=variant.name,
             metadata=metadata,
         )
+
+    def finalize(self) -> None:
+        if self._progress is not None:
+            self._progress.close()
+            self._progress = None
 
 
 __all__ = ["JPEGDefense"]

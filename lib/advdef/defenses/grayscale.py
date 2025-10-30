@@ -77,6 +77,7 @@ class GrayscaleDefense(Defense):
     def __init__(self, config: DefenseConfig) -> None:
         super().__init__(config)
         self._settings_reported = False
+        self._progress: Progress | None = None
 
     def run(self, context: RunContext, variant: DatasetVariant) -> DatasetVariant:
         params = self.config.params
@@ -92,7 +93,7 @@ class GrayscaleDefense(Defense):
             # No need to re-run conversion when already targeting RGB.
             replicate_rgb = False
 
-        if not getattr(self, "_settings_reported", False):
+        if not self._settings_reported:
             print(
                 "[info] Grayscale defense settings: "
                 f"mode={mode}, replicate_rgb={replicate_rgb}, format={format_hint}, "
@@ -107,6 +108,12 @@ class GrayscaleDefense(Defense):
         if not images:
             raise FileNotFoundError(f"No images matched the provided extensions in {input_dir}.")
 
+        if self._progress is None:
+            self._progress = Progress(total=len(images), description="Grayscale conversion", unit="images")
+        else:
+            self._progress.add_total(len(images))
+        progress = self._progress
+
         task = functools.partial(
             convert_to_grayscale,
             input_root=input_dir,
@@ -120,19 +127,18 @@ class GrayscaleDefense(Defense):
 
         written = skipped = failed = 0
 
-        with Progress(total=len(images), description="Grayscale conversion", unit="images") as progress:
-            with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as executor:
-                for status, path in executor.map(task, images):
-                    if status == "written":
-                        written += 1
-                    elif status == "skipped":
-                        skipped += 1
-                    elif status == "dry-run":
-                        print(f"[dry-run] would write {path}")
-                    else:
-                        failed += 1
-                        print(f"[warn] Failed to convert {path}: {status}")
-                    progress.update()
+        with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as executor:
+            for status, path in executor.map(task, images):
+                if status == "written":
+                    written += 1
+                elif status == "skipped":
+                    skipped += 1
+                elif status == "dry-run":
+                    print(f"[dry-run] would write {path}")
+                else:
+                    failed += 1
+                    print(f"[warn] Failed to convert {path}: {status}")
+                progress.update()
 
         metadata = {
             "defense": "grayscale",
@@ -152,6 +158,11 @@ class GrayscaleDefense(Defense):
             parent=variant.name,
             metadata=metadata,
         )
+
+    def finalize(self) -> None:
+        if self._progress is not None:
+            self._progress.close()
+            self._progress = None
 
 
 __all__ = ["GrayscaleDefense"]

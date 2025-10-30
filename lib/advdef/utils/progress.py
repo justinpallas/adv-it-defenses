@@ -72,6 +72,16 @@ class Progress:
         )
         self._render()
 
+    def add_total(self, delta: int) -> None:
+        if self._closed:
+            raise RuntimeError("Cannot extend a closed progress bar.")
+        if delta < 0:
+            raise ValueError("Progress total increment must be non-negative.")
+        if delta == 0:
+            return
+        self.state.total += delta
+        self._render(force=True)
+
     def complete(self) -> None:
         if self._closed:
             return
