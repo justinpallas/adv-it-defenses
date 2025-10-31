@@ -69,6 +69,8 @@ experiment with:
 
 ```bash
 advdef run configs/resnet50_autoattack.yaml
+# increase verbosity if needed
+advdef run configs/resnet50_autoattack.yaml --log-level info
 ```
 
 When you already have the validation set/devkit stored elsewhere, pass
