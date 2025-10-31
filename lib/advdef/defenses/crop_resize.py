@@ -37,6 +37,9 @@ def clamp_crop_box(width: int, height: int, crop_w: int, crop_h: int, mode: str)
     crop_w = min(crop_w, width)
     crop_h = min(crop_h, height)
 
+    if crop_w == width and crop_h == height:
+        return 0, 0, width, height
+
     if mode == "center":
         left = max(0, (width - crop_w) // 2)
         top = max(0, (height - crop_h) // 2)
@@ -113,7 +116,10 @@ def transform_image(
 
             if crop_size is not None:
                 left, top, right, bottom = clamp_crop_box(img.width, img.height, crop_size[0], crop_size[1], crop_mode)
-                img = img.crop((left, top, right, bottom))
+                if (right - left, bottom - top) != (img.width, img.height):
+                    img = img.crop((left, top, right, bottom))
+                else:
+                    crop_size = None  # indicate no-op for metadata
 
             if resize_size is not None:
                 img = img.resize(resize_size, interpolation)
@@ -183,12 +189,25 @@ class CropResizeDefense(Defense):
 
         self._variant_images = {}
         total_images = 0
+        min_width: int | None = None
+        min_height: int | None = None
         for variant in variants:
             images = discover_images(Path(variant.data_dir), patterns)
             if not images:
                 raise FileNotFoundError(f"No images matched the provided extensions in {variant.data_dir}.")
             self._variant_images[variant.name] = images
             total_images += len(images)
+
+            try:
+                with Image.open(images[0]) as sample:
+                    width, height = sample.size
+            except Exception:
+                continue
+
+            if min_width is None or width < min_width:
+                min_width = width
+            if min_height is None or height < min_height:
+                min_height = height
 
         if not self._settings_reported:
             crop_size = details["crop_size"]
@@ -201,6 +220,14 @@ class CropResizeDefense(Defense):
                 f"workers={details['workers']}, format={details['format_hint']}"
             )
             self._settings_reported = True
+
+        crop_size = details["crop_size"]
+        if crop_size is not None and min_width is not None and min_height is not None:
+            crop_w, crop_h = crop_size
+            if crop_w >= min_width and crop_h >= min_height:
+                print(
+                    "[warn] Crop-Resize defense crop_size >= minimum image size; crop step will have no effect."
+                )
 
         if self._progress is not None:
             self._progress.close()
