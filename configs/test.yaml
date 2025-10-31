@@ -1,0 +1,48 @@
+name: test
+description: >
+  Sample experiment generating adversarial samples with AutoAttack, reconstructing
+  them via R-SMOE, and evaluating a ResNet-50 classifier.
+seed: 123
+work_dir: runs
+dataset:
+  type: imagenet-autoattack
+  name: imagenet_subset
+  params:
+    count: 100
+    min_confidence: 0.0
+    require_correct: false
+    batch_size: 16
+    seed: 123
+  attacks:
+    - type: autoattack
+      name: autoattack_linf
+      params:
+        attacks: ["apgd-ce", "apgd-t", "square"]
+        eps: 0.05 # 0.0313725 8/255
+        norm: Linf
+        batch_size: 8
+        device: auto
+model:
+  type: timm
+  params:
+    architecture: resnet50
+    pretrained: true
+inference:
+  type: timm
+  params:
+    batch_size: 64
+    device: auto
+    topk: 1
+defenses:
+  - type: r-smoe
+    name: r_smoe_standard
+    params:
+      root: external/r-smoe
+      mode: standard
+      iterations: 500
+      kernels: 2000
+      file_name_prefix: rsmoe
+evaluation:
+  type: imagenet
+  params:
+    topk: [1, 5]

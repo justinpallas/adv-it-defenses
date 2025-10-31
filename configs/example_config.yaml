@@ -50,6 +50,32 @@ defenses:
     name: grayscale_default
     params:
       replicate_rgb: true
+  - type: crop-resize
+    name: crop_resize_224
+    params:
+      crop_size: [256, 256]
+      resize_size: [224, 224]
+      interpolation: lanczos
+  - type: bit-depth
+    name: bit_depth_4bit
+    params:
+      bits: 4
+      dither: true
+  - type: tvm
+    name: tvm_default
+    params:
+      weight: 0.08
+      eps: 1.0e-4
+      n_iter_max: 200
+  - type: low-pass
+    name: low_pass_gaussian
+    params:
+      filter: gaussian
+      sigma: 1.2
+  - type: flip
+    name: flip_horizontal
+    params:
+      direction: horizontal
 evaluation:
   type: imagenet
   params:

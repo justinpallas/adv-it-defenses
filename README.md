@@ -17,6 +17,11 @@ The Adversarial Defense Experiment Toolkit is a modular framework for testing di
 - SMoE (Steered Mixture-of-Experts)
 - JPEG Compression
 - Grayscale Conversion
+- Crop & Resize Transformation
+- Horizontal Flip
+- Bit-depth Reduction
+- Total Variation Minimization (TVM)
+- Low-pass Filtering
 
 ## 🖥️ Installation
 
