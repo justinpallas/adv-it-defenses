@@ -78,8 +78,8 @@ def validate_crop_resize(crop: tuple[int, int] | None, resize: tuple[int, int] |
         crop_w, crop_h = crop
         resize_w, resize_h = resize
         if crop_w < resize_w or crop_h < resize_h:
-            raise ValueError(
-                f"{name}: crop_size {crop} must not be smaller than resize_size {resize}."
+            print(
+                f"[warn] {name}: crop_size {crop} smaller than resize_size {resize}; image will be upsampled."
             )
 
 
