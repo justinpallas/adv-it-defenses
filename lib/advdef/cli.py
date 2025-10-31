@@ -15,6 +15,7 @@ from advdef.config import ExperimentConfig
 from advdef.core.context import RunContext
 from advdef.core.pipeline import Pipeline
 from advdef.utils import capture_environment, load_yaml_file, utc_timestamp
+import logging
 
 
 def _slugify(text: str) -> str:
@@ -64,10 +65,13 @@ def _execute_experiment(
     experiment: ExperimentConfig,
     run_name: str | None = None,
     context_options: Dict[str, object] | None = None,
+    log_level: str = "warning",
 ) -> Tuple[str, dict]:
     timestamp = utc_timestamp()
     run_id = run_name or f"{timestamp}_{_slugify(experiment.name)}"
     run_dir = experiment.run_directory(run_id)
+
+    logging.basicConfig(level=getattr(logging, log_level.upper(), logging.WARNING))
 
     context = RunContext(
         experiment=experiment,
@@ -109,7 +113,13 @@ def app() -> None:
     default=None,
     help="Override base directory for ImageNet data (val set + devkit)."
 )
-def run(config: Path, run_name: str | None, imagenet_root: Path | None) -> None:
+@click.option(
+    "--log-level",
+    type=click.Choice(["warning", "info", "debug"], case_sensitive=False),
+    default="warning",
+    help="Set logging verbosity for the run (warning/info/debug).",
+)
+def run(config: Path, run_name: str | None, imagenet_root: Path | None, log_level: str) -> None:
     """Run a single experiment using the provided YAML configuration file."""
     experiment = _load_experiment(config)
     run_id, metrics = _execute_experiment(
@@ -117,6 +127,7 @@ def run(config: Path, run_name: str | None, imagenet_root: Path | None) -> None:
         experiment,
         run_name=run_name,
         context_options={"imagenet_root": imagenet_root} if imagenet_root else None,
+        log_level=log_level,
     )
     click.echo(f"Experiment finished. Run id: {run_id}")
     click.echo(json.dumps(metrics, indent=2))
@@ -130,7 +141,13 @@ def run(config: Path, run_name: str | None, imagenet_root: Path | None) -> None:
     default=None,
     help="Override base directory for ImageNet data (val set + devkit).",
 )
-def queue(queue: Path, imagenet_root: Path | None) -> None:
+@click.option(
+    "--log-level",
+    type=click.Choice(["warning", "info", "debug"], case_sensitive=False),
+    default="warning",
+    help="Set logging verbosity for the run (warning/info/debug).",
+)
+def queue(queue: Path, imagenet_root: Path | None, log_level: str) -> None:
     """Execute multiple experiments described in a queue YAML file."""
     queue_data = load_yaml_file(queue)
     jobs = queue_data.get("jobs", [])
@@ -156,6 +173,7 @@ def queue(queue: Path, imagenet_root: Path | None) -> None:
             experiment,
             run_name=run_name,
             context_options={"imagenet_root": imagenet_root} if imagenet_root else None,
+            log_level=log_level,
         )
         results.append((experiment.name, run_id))
 

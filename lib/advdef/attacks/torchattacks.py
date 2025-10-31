@@ -220,9 +220,13 @@ class TorchAttackBase(Attack):
 class PGDAttack(TorchAttackBase):
     DEFAULT_NAME = "pgd"
 
-    @property
-    def ATTACK_CLASS(self):  # type: ignore[override]
-        return torchattacks.PGD  # type: ignore[attr-defined]
+    def make_attack(self, model, params: dict[str, Any]):  # type: ignore[override]
+        norm = params.pop("norm", "Linf")
+        if norm.lower() in {"linf", "inf"}:
+            return torchattacks.PGD(model, **params)  # type: ignore[attr-defined]
+        if norm.lower() == "l2":
+            return torchattacks.PGDL2(model, **params)  # type: ignore[attr-defined]
+        raise ValueError(f"Unsupported norm '{norm}' for PGD attack.")
 
     def build_attack_kwargs(  # type: ignore[override]
         self,
@@ -236,7 +240,13 @@ class PGDAttack(TorchAttackBase):
         cw_steps: int,
         cw_confidence: float,
     ) -> dict[str, Any]:
-        return {"eps": eps, "alpha": alpha, "steps": steps, "random_start": random_start, "norm": norm}
+        return {
+            "eps": eps,
+            "alpha": alpha,
+            "steps": steps,
+            "random_start": random_start,
+            "norm": norm,
+        }
 
 
 @register_attack("fgsm")
