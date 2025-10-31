@@ -159,6 +159,7 @@ class TorchAttackBase(Attack):
         norm = str(params.get("norm", "Linf"))
         variant_prefix = params.get("suffix", self.DEFAULT_NAME)
         base_variant_name = "baseline"
+        variant_name = self.config.name or variant_prefix
 
         samples = dataset.metadata.get("samples")
         if not samples:
@@ -204,7 +205,7 @@ class TorchAttackBase(Attack):
 
         return [
             _build_variant(
-                name=f"{base_variant_name}-{variant_prefix}",
+                name=variant_name,
                 attack_dir=attack_dir,
                 base_variant=base_variant_name,
                 outputs=outputs,
