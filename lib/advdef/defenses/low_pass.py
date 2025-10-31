@@ -100,9 +100,16 @@ def _filter_array(
     kernel_size: int,
 ) -> np.ndarray:
     if filter_type == "gaussian":
-        return gaussian_filter(array, sigma=sigma, mode="reflect")
+        if array.ndim == 3:
+            sigma_tuple = (sigma, sigma, 0.0)
+        else:
+            sigma_tuple = sigma
+        return gaussian_filter(array, sigma=sigma_tuple, mode="reflect")
     if filter_type == "box":
-        size = kernel_size
+        if array.ndim == 3:
+            size = (kernel_size, kernel_size, 1)
+        else:
+            size = kernel_size
         return uniform_filter(array, size=size, mode="reflect")
     raise ValueError(f"Unsupported filter_type '{filter_type}'. Expected 'gaussian' or 'box'.")
 
