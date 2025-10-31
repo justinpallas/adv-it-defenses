@@ -53,7 +53,7 @@ defenses:
   - type: crop-resize
     name: crop_resize_224
     params:
-      crop_size: [256, 256]
+      crop_size: [200, 200]
       resize_size: [224, 224]
       interpolation: lanczos
   - type: bit-depth
