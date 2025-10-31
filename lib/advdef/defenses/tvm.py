@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import concurrent.futures
 import functools
+import inspect
 import os
 from pathlib import Path
 from typing import Sequence
@@ -25,6 +26,39 @@ from advdef.core.registry import register_defense
 from advdef.utils import Progress, ensure_dir
 
 ImageFile.LOAD_TRUNCATED_IMAGES = True
+
+
+def _resolve_tvm_parameters():
+    try:
+        return inspect.signature(denoise_tv_chambolle).parameters
+    except (TypeError, ValueError):  # pragma: no cover - fallback when signature unavailable
+        return {}
+
+
+_TVM_PARAMS = _resolve_tvm_parameters()
+
+
+def _run_tvm(
+    array: np.ndarray,
+    *,
+    weight: float,
+    eps: float,
+    n_iter_max: int,
+    channel_axis: int | None,
+) -> np.ndarray:
+    kwargs: dict[str, object] = {"weight": weight, "eps": eps}
+
+    if "channel_axis" in _TVM_PARAMS:
+        kwargs["channel_axis"] = channel_axis
+    elif "multichannel" in _TVM_PARAMS:
+        kwargs["multichannel"] = channel_axis is not None
+
+    if "n_iter_max" in _TVM_PARAMS:
+        kwargs["n_iter_max"] = n_iter_max
+    elif "max_num_iter" in _TVM_PARAMS:
+        kwargs["max_num_iter"] = n_iter_max
+
+    return denoise_tv_chambolle(array, **kwargs)
 
 
 def discover_images(root: Path, patterns: Sequence[str]) -> list[Path]:
@@ -73,7 +107,7 @@ def apply_tvm(
             if mode == "RGBA":
                 rgb = arr[..., :3]
                 alpha = arr[..., 3:]
-                denoised = denoise_tv_chambolle(
+                denoised = _run_tvm(
                     rgb,
                     weight=weight,
                     eps=eps,
@@ -83,7 +117,7 @@ def apply_tvm(
                 denoised = np.concatenate([denoised, alpha], axis=-1)
             else:
                 channel_axis = -1 if (multichannel and arr.ndim == 3) else None
-                denoised = denoise_tv_chambolle(
+                denoised = _run_tvm(
                     arr,
                     weight=weight,
                     eps=eps,
@@ -232,6 +266,11 @@ class TVMDefense(Defense):
                     failed += 1
                     print(f"[warn] Failed to denoise {path}: {status}")
                 progress.update()
+
+        if failed:
+            raise RuntimeError(
+                f"TVM defense failed for {failed} image(s) in variant '{variant.name}'."
+            )
 
         metadata = {
             "defense": "tvm",
