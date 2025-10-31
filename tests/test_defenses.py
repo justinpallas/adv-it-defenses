@@ -57,6 +57,11 @@ def _execute_defense(
     defense.finalize()
 
     output_path = Path(result_variant.data_dir) / image_name
+    if not output_path.exists():
+        stem = Path(image_name).stem
+        matches = list(Path(result_variant.data_dir).glob(f"{stem}.*"))
+        if matches:
+            output_path = matches[0]
     if not pre_existing:
         assert output_path.exists(), f"Expected output file {output_path}."
     return output_path
