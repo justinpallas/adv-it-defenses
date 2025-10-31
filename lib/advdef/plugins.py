@@ -7,6 +7,7 @@ from .datasets import imagenet_autoattack  # noqa: F401
 
 # Attacks
 from .attacks import autoattack  # noqa: F401
+from .attacks import torchattacks  # noqa: F401
 
 # Inference backends
 from .inference import timm_backend  # noqa: F401

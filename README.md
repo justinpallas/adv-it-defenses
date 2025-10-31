@@ -10,7 +10,11 @@ The Adversarial Defense Experiment Toolkit is a modular framework for testing di
 
 ### ⚔️ Available Attacks
 
-- AutoAttack Suite
+- AutoAttack Suite (APGD-CE, APGD-T, FAB, Square)
+- PGD (ℓ∞/ℓ₂)
+- FGSM
+- Carlini & Wagner (ℓ₂)
+- DeepFool
 
 ### 🛡️ Available Defenses
 
@@ -34,6 +38,12 @@ pip install -e .
 Ensure that additional dependencies (CUDA-enabled PyTorch, pyautoattack, the
 `plyfile` package, and the R-SMOE submodule requirements) are installed in the
 environment.
+
+To install optional attack backends (PGD, FGSM, CW, DeepFool via `torchattacks`), run:
+
+```bash
+pip install -e '.[attacks]'
+```
 
 To use the R-SMOE defense, run the helper command once to build the CUDA
 extensions and install the required Python packages in your current environment:

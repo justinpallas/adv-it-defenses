@@ -52,11 +52,17 @@ ATTACK_SPECS: dict[str, dict[str, object]] = {
         "subdir": "apgd-t",
         "seed_offset": 1,
     },
+    "fab": {
+        "display": "FAB",
+        "key": "fab",
+        "subdir": "fab",
+        "seed_offset": 2,
+    },
     "square": {
         "display": "SquareAttack",
         "key": "square",
         "subdir": "squareattack",
-        "seed_offset": 2,
+        "seed_offset": 3,
     },
 }
 

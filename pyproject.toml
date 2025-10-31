@@ -26,7 +26,8 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = ["pytest", "black", "ruff"]
+dev = ["pytest", "black", "ruff", "scikit-image>=0.22", "torchattacks>=3.5"]
+attacks = ["torchattacks>=3.5"]
 
 [project.scripts]
 advdef = "advdef.cli:app"
