@@ -15,7 +15,7 @@ from advdef.core.context import RunContext
 from advdef.core.pipeline import Attack, DatasetArtifacts, DatasetVariant
 from advdef.core.registry import register_attack
 from advdef.datasets.imagenet_autoattack import SampleInfo, build_transform, load_image, write_manifest
-from advdef.utils import ensure_dir, normalized_l2, summarize_tensor
+from advdef.utils import Progress, ensure_dir, normalized_l2, summarize_tensor
 
 try:
     import torchattacks
@@ -75,29 +75,38 @@ def _generate_adversarial(
     variant_prefix: str,
     batch_size: int,
     device: torch.device,
+    *,
+    progress_label: str | None = None,
 ) -> tuple[list[tuple[SampleInfo, Path]], list[float]]:
     dataset_loader = DataLoader(_SampleDataset(samples), batch_size=batch_size)
     outputs = []
     normalized_values: list[float] = []
 
-    for batch_idx, (images, labels) in enumerate(dataset_loader, start=1):
-        images = images.to(device)
-        labels = labels.to(device)
-        adv_images = attack(images, labels)
-        adv_images = adv_images.detach().cpu()
-        originals_cpu = images.detach().cpu()
-        batch_normalized = normalized_l2(originals_cpu, adv_images).tolist()
+    label = progress_label or variant_prefix
 
-        start = (batch_idx - 1) * batch_size
-        end = min(start + batch_size, len(samples))
-        batch_infos = samples[start:end]
-        for adv_tensor, info in zip(adv_images, batch_infos):
-            adv_image = adv_tensor.clamp(0.0, 1.0)
-            save_path = attack_root / f"{info.path.stem}.png"
-            save_path.parent.mkdir(parents=True, exist_ok=True)
-            to_pil_image(adv_image).save(save_path)
-            outputs.append((info, save_path))
-        normalized_values.extend(batch_normalized)
+    with Progress(total=len(samples), description=f"{label} attack", unit="images") as progress:
+        for batch_idx, (images, labels) in enumerate(dataset_loader, start=1):
+            images = images.to(device)
+            labels = labels.to(device)
+            adv_images = attack(images, labels)
+            adv_images = adv_images.detach().cpu()
+            originals_cpu = images.detach().cpu()
+            batch_normalized = normalized_l2(originals_cpu, adv_images).tolist()
+
+            start = (batch_idx - 1) * batch_size
+            end = min(start + batch_size, len(samples))
+            batch_infos = samples[start:end]
+            for adv_tensor, info in zip(adv_images, batch_infos):
+                adv_image = adv_tensor.clamp(0.0, 1.0)
+                save_path = attack_root / f"{info.path.stem}.png"
+                save_path.parent.mkdir(parents=True, exist_ok=True)
+                to_pil_image(adv_image).save(save_path)
+                outputs.append((info, save_path))
+                progress.update()
+
+            normalized_values.extend(batch_normalized)
+
+        progress.refresh()
 
     return outputs, normalized_values
 
@@ -181,6 +190,8 @@ class TorchAttackBase(Attack):
 
         attack_dir = ensure_dir(context.artifacts_dir / "attacks" / variant_prefix)
 
+        print(f"[info] Starting {variant_name} attack on {len(samples)} samples.")
+
         attack_kwargs = self.build_attack_kwargs(
             params=params,
             eps=eps,
@@ -201,6 +212,7 @@ class TorchAttackBase(Attack):
             variant_prefix,
             batch_size,
             device,
+            progress_label=variant_name,
         )
         normalized_tensor = torch.tensor(normalized_values, dtype=torch.float32)
         normalized_stats = summarize_tensor(normalized_tensor)

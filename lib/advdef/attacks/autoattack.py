@@ -118,11 +118,21 @@ def run_attack(
     device: torch.device,
     verbose: bool,
     params: dict,
+    *,
+    chunk_id: int | None = None,
+    chunk_count: int | None = None,
 ) -> torch.Tensor:
     attack = create_autoattack(model, eps=eps, norm=norm, seed=seed, device=device, verbose=verbose)
     configure_autoattack(attack, params)
     attack.attacks_to_run = [attack_key]
     attack.batch_size = batch_size
+    chunk_detail = ""
+    if chunk_id is not None and chunk_count is not None:
+        chunk_detail = f" (chunk {chunk_id}/{chunk_count})"
+    elif chunk_id is not None:
+        chunk_detail = f" (chunk {chunk_id})"
+    logging.info("[%s] processing %s samples%s", attack_name, len(inputs), chunk_detail)
+    chunk_begin = time.monotonic()
     try:
         adversarial = attack.run_standard_evaluation(inputs.clone(), labels.clone(), bs=batch_size)
     except TypeError:
@@ -132,6 +142,8 @@ def run_attack(
             adversarial = attack.run_standard_evaluation(inputs.clone(), labels.clone())
     if isinstance(adversarial, tuple):  # older autoattack returns (adv, _)
         adversarial = adversarial[0]
+    elapsed = time.monotonic() - chunk_begin
+    logging.debug("%s%s finished in %.1fs", attack_name, chunk_detail, elapsed)
     return adversarial.detach().cpu()
 
 
@@ -201,35 +213,69 @@ class AutoAttackAttack(Attack):
 
             tensors = [load_image(info.path, transform) for info in samples]
             labels = [info.target_label if info.target_label is not None else info.predicted_label for info in samples]
-            inputs = torch.stack(tensors, dim=0).to(device)
-            labels_tensor = torch.tensor(labels, dtype=torch.long, device=device)
 
-            chunk_begin = time.monotonic()
-            logging.info("[%s] processing %s samples in a single pass", display, len(samples))
-            adv = run_attack(
-                display,
-                attack_key,
-                normalized_model,
-                inputs,
-                labels_tensor,
-                batch_size=min(batch_size, len(samples)),
-                eps=eps,
-                norm=norm,
-                seed=seed_base + seed_offset,
-                device=device,
-                verbose=verbose,
-                params=params,
-            )
-            elapsed = time.monotonic() - chunk_begin
-            logging.debug("%s finished in %.1fs", display, elapsed)
+            chunk_size = int(params.get("chunk_size", batch_size))
+            if chunk_size <= 0:
+                raise ValueError("chunk_size must be positive.")
+            chunk_size = min(chunk_size, len(samples))
+            total_chunks = (len(samples) + chunk_size - 1) // chunk_size
 
-            originals_cpu = inputs.detach().cpu()
-            normalized_l2_values = normalized_l2(originals_cpu, adv)
-            normalized_l2_stats = summarize_tensor(normalized_l2_values)
-            total_count = int(normalized_l2_values.numel())
-            nonzero_mask = normalized_l2_values > 1e-12
+            normalized_values: list[float] = []
+            normalized_l2_column: list[str] = []
+
+            with Progress(total=len(samples), description=f"{display} attack", unit="images") as progress:
+                for chunk_idx in range(total_chunks):
+                    start = chunk_idx * chunk_size
+                    end = min(start + chunk_size, len(samples))
+                    batch_infos = samples[start:end]
+                    batch_outputs = outputs[start:end]
+                    batch_tensors = tensors[start:end]
+
+                    if not batch_infos:
+                        continue
+
+                    inputs_tensor = torch.stack(batch_tensors, dim=0).to(device)
+                    labels_tensor = torch.tensor(labels[start:end], dtype=torch.long, device=device)
+
+                    adv = run_attack(
+                        display,
+                        attack_key,
+                        normalized_model,
+                        inputs_tensor,
+                        labels_tensor,
+                        batch_size=min(batch_size, len(batch_infos)),
+                        eps=eps,
+                        norm=norm,
+                        seed=seed_base + seed_offset + chunk_idx,
+                        device=device,
+                        verbose=verbose,
+                        params=params,
+                        chunk_id=chunk_idx + 1,
+                        chunk_count=total_chunks,
+                    )
+
+                    originals_cpu = inputs_tensor.detach().cpu()
+                    normalized_chunk = normalized_l2(originals_cpu, adv)
+                    normalized_values.extend(normalized_chunk.tolist())
+                    normalized_l2_column.extend(f"{value:.8f}" for value in normalized_chunk.tolist())
+
+                    save_images(
+                        adv,
+                        batch_outputs,
+                        description=f"{display} outputs chunk {chunk_idx + 1}",
+                        progress=progress,
+                    )
+                    progress.refresh()
+
+                    if device.type == "cuda":
+                        torch.cuda.empty_cache()
+
+            normalized_tensor = torch.tensor(normalized_values, dtype=torch.float32)
+            normalized_l2_stats = summarize_tensor(normalized_tensor)
+            total_count = int(normalized_tensor.numel())
+            nonzero_mask = normalized_tensor > 1e-12
             nonzero_count = int(nonzero_mask.sum().item())
-            mean_nonzero = float(normalized_l2_values[nonzero_mask].mean().item()) if nonzero_count else 0.0
+            mean_nonzero = float(normalized_tensor[nonzero_mask].mean().item()) if nonzero_count else 0.0
             normalized_l2_stats.update(
                 {
                     "mean_nonzero": mean_nonzero,
@@ -237,19 +283,6 @@ class AutoAttackAttack(Attack):
                     "count_nonzero": nonzero_count,
                 }
             )
-            normalized_l2_column = [f"{value:.8f}" for value in normalized_l2_values.tolist()]
-
-            with Progress(total=len(samples), description=f"{display} attack", unit="images") as progress:
-                save_images(
-                    adv,
-                    outputs,
-                    description=f"{display} outputs",
-                    progress=progress,
-                )
-                progress.refresh()
-
-            if device.type == "cuda":
-                torch.cuda.empty_cache()
 
             write_manifest(
                 manifest_path,
@@ -269,6 +302,8 @@ class AutoAttackAttack(Attack):
                         "eps": eps,
                         "norm": norm,
                         "seed": seed_base + seed_offset,
+                        "chunk_size": chunk_size,
+                        "chunk_count": total_chunks,
                         "count": len(samples),
                         "manifest": manifest_path.as_posix(),
                         "image_hw": image_hw,
