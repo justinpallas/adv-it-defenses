@@ -221,5 +221,27 @@ class Pipeline:
         ]
 
         metrics = self.run_evaluation(dataset, combined_variants, combined_inferences)
+        attack_normalized: Dict[str, Dict[str, Any]] = {}
+        for record in self.variant_records:
+            metadata = record.get("metadata", {})
+            attack_name = metadata.get("attack")
+            stats = metadata.get("normalized_l2")
+            if not attack_name or not isinstance(stats, dict):
+                continue
+            mean_nonzero = stats.get("mean_nonzero")
+            count_nonzero = stats.get("count_nonzero")
+            count_total = stats.get("count_total")
+            if mean_nonzero is None:
+                continue
+            attack_normalized[record["name"]] = {
+                "attack": attack_name,
+                "mean_normalized_l2_nonzero": mean_nonzero,
+                "nonzero_count": count_nonzero,
+                "total_count": count_total,
+            }
+        if attack_normalized:
+            metrics.setdefault("attack_metrics", {})
+            metrics["attack_metrics"]["normalized_l2"] = attack_normalized
+
         self.context.save_metrics(metrics)
         return metrics

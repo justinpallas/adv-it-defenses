@@ -204,6 +204,17 @@ class TorchAttackBase(Attack):
         )
         normalized_tensor = torch.tensor(normalized_values, dtype=torch.float32)
         normalized_stats = summarize_tensor(normalized_tensor)
+        total_count = int(normalized_tensor.numel())
+        nonzero_mask = normalized_tensor > 1e-12
+        nonzero_count = int(nonzero_mask.sum().item())
+        mean_nonzero = float(normalized_tensor[nonzero_mask].mean().item()) if nonzero_count else 0.0
+        normalized_stats.update(
+            {
+                "mean_nonzero": mean_nonzero,
+                "count_total": total_count,
+                "count_nonzero": nonzero_count,
+            }
+        )
         normalized_column = [f"{value:.8f}" for value in normalized_values]
 
         metadata: dict[str, Any] = {

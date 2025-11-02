@@ -226,6 +226,17 @@ class AutoAttackAttack(Attack):
             originals_cpu = inputs.detach().cpu()
             normalized_l2_values = normalized_l2(originals_cpu, adv)
             normalized_l2_stats = summarize_tensor(normalized_l2_values)
+            total_count = int(normalized_l2_values.numel())
+            nonzero_mask = normalized_l2_values > 1e-12
+            nonzero_count = int(nonzero_mask.sum().item())
+            mean_nonzero = float(normalized_l2_values[nonzero_mask].mean().item()) if nonzero_count else 0.0
+            normalized_l2_stats.update(
+                {
+                    "mean_nonzero": mean_nonzero,
+                    "count_total": total_count,
+                    "count_nonzero": nonzero_count,
+                }
+            )
             normalized_l2_column = [f"{value:.8f}" for value in normalized_l2_values.tolist()]
 
             with Progress(total=len(samples), description=f"{display} attack", unit="images") as progress:
