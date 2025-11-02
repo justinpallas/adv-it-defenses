@@ -221,7 +221,7 @@ def test_tvm_reduces_noise(tmp_path):
         tmp_path,
         TVMDefense,
         "tvm",
-        {"weight": 0.1, "eps": 1e-4, "n_iter_max": 50},
+        {"weight": 0.1, "eps": 1e-4, "n_iter_max": 50, "keep_probability": 0.0},
         arr,
     )
 
@@ -230,6 +230,47 @@ def test_tvm_reduces_noise(tmp_path):
     original_std = arr.astype(np.float32).std()
     denoised_std = result.astype(np.float32).std()
     assert denoised_std < original_std, "TVM defense did not reduce overall variation."
+
+
+def test_tvm_respects_pixel_mask(tmp_path):
+    rng = np.random.default_rng(1)
+    base = np.full((12, 12, 3), 128, dtype=np.uint8)
+    noise = rng.integers(-60, 60, size=base.shape, dtype=np.int16)
+    arr = np.clip(base.astype(np.int16) + noise, 0, 255).astype(np.uint8)
+
+    params = {
+        "weight": 0.15,
+        "n_iter_max": 40,
+        "keep_probability": 0.3,
+        "projection_steps": 4,
+        "seed": 1234,
+    }
+
+    output_path = _execute_defense(
+        tmp_path,
+        TVMDefense,
+        "tvm",
+        params,
+        arr,
+    )
+
+    result = np.array(Image.open(output_path))
+
+    master_seed = np.random.SeedSequence(params["seed"])
+    variant_seed = master_seed.spawn(1)[0]
+    image_seed = variant_seed.spawn(1)[0]
+    mask_rng = np.random.default_rng(image_seed)
+    mask = mask_rng.random(arr.shape[:2]) < params["keep_probability"]
+    if not mask.any():
+        y = mask_rng.integers(arr.shape[0])
+        x = mask_rng.integers(arr.shape[1])
+        mask[y, x] = True
+
+    np.testing.assert_array_equal(result[mask], arr[mask])
+    if (~mask).any():
+        assert np.any(result[~mask] != arr[~mask])
+    else:
+        assert np.any(result != arr)
 
 
 def test_grayscale_replication(tmp_path):
