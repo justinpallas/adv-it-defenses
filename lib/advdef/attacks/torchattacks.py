@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
-from typing import Iterable, Any
+from typing import Iterable, Any, Sequence
 
 import torch
 from torch.utils.data import DataLoader, Dataset
@@ -15,7 +15,7 @@ from advdef.core.context import RunContext
 from advdef.core.pipeline import Attack, DatasetArtifacts, DatasetVariant
 from advdef.core.registry import register_attack
 from advdef.datasets.imagenet_autoattack import SampleInfo, build_transform, load_image, write_manifest
-from advdef.utils import ensure_dir
+from advdef.utils import ensure_dir, normalized_l2, summarize_tensor
 
 try:
     import torchattacks
@@ -75,15 +75,18 @@ def _generate_adversarial(
     variant_prefix: str,
     batch_size: int,
     device: torch.device,
-):
+) -> tuple[list[tuple[SampleInfo, Path]], list[float]]:
     dataset_loader = DataLoader(_SampleDataset(samples), batch_size=batch_size)
     outputs = []
+    normalized_values: list[float] = []
 
     for batch_idx, (images, labels) in enumerate(dataset_loader, start=1):
         images = images.to(device)
         labels = labels.to(device)
         adv_images = attack(images, labels)
         adv_images = adv_images.detach().cpu()
+        originals_cpu = images.detach().cpu()
+        batch_normalized = normalized_l2(originals_cpu, adv_images).tolist()
 
         start = (batch_idx - 1) * batch_size
         end = min(start + batch_size, len(samples))
@@ -94,8 +97,9 @@ def _generate_adversarial(
             save_path.parent.mkdir(parents=True, exist_ok=True)
             to_pil_image(adv_image).save(save_path)
             outputs.append((info, save_path))
+        normalized_values.extend(batch_normalized)
 
-    return outputs
+    return outputs, normalized_values
 
 
 def _build_variant(
@@ -104,9 +108,15 @@ def _build_variant(
     base_variant: str,
     outputs: list[tuple[SampleInfo, Path]],
     metadata: dict,
+    extra_columns: dict[str, Sequence[object]] | None = None,
 ) -> DatasetVariant:
     manifest_path = attack_dir / "manifest.csv"
-    write_manifest(manifest_path, [info for info, _ in outputs], [path for _, path in outputs])
+    write_manifest(
+        manifest_path,
+        [info for info, _ in outputs],
+        [path for _, path in outputs],
+        extra_columns=extra_columns,
+    )
 
     return DatasetVariant(
         name=name,
@@ -183,7 +193,7 @@ class TorchAttackBase(Attack):
         )
         attack = self.make_attack(model, attack_kwargs)
 
-        outputs = _generate_adversarial(
+        outputs, normalized_values = _generate_adversarial(
             attack,
             dataset,
             list(samples),
@@ -192,6 +202,9 @@ class TorchAttackBase(Attack):
             batch_size,
             device,
         )
+        normalized_tensor = torch.tensor(normalized_values, dtype=torch.float32)
+        normalized_stats = summarize_tensor(normalized_tensor)
+        normalized_column = [f"{value:.8f}" for value in normalized_values]
 
         metadata: dict[str, Any] = {
             "attack": variant_prefix,
@@ -200,6 +213,7 @@ class TorchAttackBase(Attack):
             "steps": steps,
             "random_start": random_start,
             "norm": norm,
+            "normalized_l2": normalized_stats,
         }
         metadata.update(self.additional_metadata(params))
 
@@ -210,6 +224,7 @@ class TorchAttackBase(Attack):
                 base_variant=base_variant_name,
                 outputs=outputs,
                 metadata=metadata,
+                extra_columns={"normalized_l2": normalized_column},
             )
         ]
 

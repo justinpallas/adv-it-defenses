@@ -22,7 +22,7 @@ from advdef.datasets.imagenet_autoattack import (
     save_images,
     write_manifest,
 )
-from advdef.utils import Progress, ensure_dir
+from advdef.utils import Progress, ensure_dir, normalized_l2, summarize_tensor
 
 try:
     from pyautoattack import AutoAttack
@@ -223,6 +223,11 @@ class AutoAttackAttack(Attack):
             elapsed = time.monotonic() - chunk_begin
             logging.debug("%s finished in %.1fs", display, elapsed)
 
+            originals_cpu = inputs.detach().cpu()
+            normalized_l2_values = normalized_l2(originals_cpu, adv)
+            normalized_l2_stats = summarize_tensor(normalized_l2_values)
+            normalized_l2_column = [f"{value:.8f}" for value in normalized_l2_values.tolist()]
+
             with Progress(total=len(samples), description=f"{display} attack", unit="images") as progress:
                 save_images(
                     adv,
@@ -235,7 +240,12 @@ class AutoAttackAttack(Attack):
             if device.type == "cuda":
                 torch.cuda.empty_cache()
 
-            write_manifest(manifest_path, samples, outputs)
+            write_manifest(
+                manifest_path,
+                samples,
+                outputs,
+                extra_columns={"normalized_l2": normalized_l2_column},
+            )
 
             variants.append(
                 DatasetVariant(
@@ -251,6 +261,7 @@ class AutoAttackAttack(Attack):
                         "count": len(samples),
                         "manifest": manifest_path.as_posix(),
                         "image_hw": image_hw,
+                        "normalized_l2": normalized_l2_stats,
                     },
                 )
             )

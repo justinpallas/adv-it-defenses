@@ -562,7 +562,12 @@ class ImageNetAutoAttackBuilder(DatasetBuilder):
                 redownload_callback()
 
 
-def write_manifest(manifest_path: Path, samples: Sequence[SampleInfo], outputs: Sequence[Path]) -> None:
+def write_manifest(
+    manifest_path: Path,
+    samples: Sequence[SampleInfo],
+    outputs: Sequence[Path],
+    extra_columns: dict[str, Sequence[object]] | None = None,
+) -> None:
     manifest_path.parent.mkdir(parents=True, exist_ok=True)
     with manifest_path.open("w", newline="") as handle:
         writer = csv.writer(handle)
@@ -570,8 +575,18 @@ def write_manifest(manifest_path: Path, samples: Sequence[SampleInfo], outputs: 
         header = ["output_path", "source_filename", "predicted_label", "confidence"]
         if include_target:
             header.append("ground_truth_label")
+        column_keys: list[str] = []
+        if extra_columns:
+            column_keys = list(extra_columns.keys())
+            for key in column_keys:
+                values = extra_columns[key]
+                if len(values) != len(samples):
+                    raise ValueError(
+                        f"Extra column '{key}' has {len(values)} entries but {len(samples)} samples were provided."
+                    )
+                header.append(key)
         writer.writerow(header)
-        for info, output_path in zip(samples, outputs):
+        for index, (info, output_path) in enumerate(zip(samples, outputs)):
             row = [
                 output_path.as_posix(),
                 info.path.name,
@@ -580,4 +595,7 @@ def write_manifest(manifest_path: Path, samples: Sequence[SampleInfo], outputs: 
             ]
             if include_target:
                 row.append("" if info.target_label is None else str(info.target_label))
+            if column_keys:
+                for key in column_keys:
+                    row.append(extra_columns[key][index])
             writer.writerow(row)

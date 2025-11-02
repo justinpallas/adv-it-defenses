@@ -131,6 +131,7 @@ class Pipeline:
     def __init__(self, context: RunContext) -> None:
         self.context = context
         self.config = context.experiment
+        self.variant_records: List[Dict[str, Any]] = []
 
     def build_dataset(self) -> DatasetArtifacts:
         dataset_cls = DATASETS.get(self.config.dataset.type)
@@ -208,6 +209,16 @@ class Pipeline:
 
         combined_variants = list(variants) + list(defended)
         combined_inferences = list(baseline_inferences) + list(defended_inferences)
+
+        self.variant_records = [
+            {
+                "name": variant.name,
+                "parent": variant.parent,
+                "data_dir": variant.data_dir,
+                "metadata": variant.metadata,
+            }
+            for variant in combined_variants
+        ]
 
         metrics = self.run_evaluation(dataset, combined_variants, combined_inferences)
         self.context.save_metrics(metrics)

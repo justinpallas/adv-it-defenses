@@ -93,6 +93,7 @@ def _execute_experiment(
         "config_path": str(config_path),
         "environment": capture_environment(),
         "metrics": metrics,
+        "variants": pipeline.variant_records,
     }
     context.save_metadata(metadata)
 
