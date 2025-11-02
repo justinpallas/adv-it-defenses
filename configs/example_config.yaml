@@ -51,22 +51,27 @@ defenses:
     params:
       replicate_rgb: true
   - type: crop-resize
-    name: crop_resize_224
+    name: crop_resize
     params:
-      crop_size: [200, 200]
+      crop_size: [90, 90]
       resize_size: [224, 224]
-      interpolation: lanczos
+      crop_mode: random
+      num_crops: 30
+      seed: 123
+      interpolation: bilinear
   - type: bit-depth
     name: bit_depth_4bit
     params:
-      bits: 4
+      bits: 3
       dither: true
   - type: tvm
     name: tvm_default
     params:
-      weight: 0.08
+      weight: 0.03 # λTV
       eps: 1.0e-4
       n_iter_max: 200
+      keep_probability: 0.5
+      projection_steps: 5
   - type: low-pass
     name: low_pass_gaussian
     params:

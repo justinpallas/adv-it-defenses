@@ -94,6 +94,57 @@ def test_crop_resize_crops_center(tmp_path):
     np.testing.assert_array_equal(result, expected)
 
 
+def test_crop_resize_random_multicrop(tmp_path):
+    base = np.arange(25, dtype=np.uint8).reshape(5, 5)
+    arr = np.stack([base, base, base], axis=-1)
+
+    input_dir = tmp_path / "input"
+    input_dir.mkdir()
+    image_name = "sample.png"
+    Image.fromarray(arr).save(input_dir / image_name)
+
+    context = DummyContext(tmp_path)
+    variant = DatasetVariant(name="variant", data_dir=str(input_dir))
+    params = {
+        "crop_size": [2, 2],
+        "resize_size": [2, 2],
+        "crop_mode": "random",
+        "num_crops": 3,
+        "seed": 123,
+        "crop_suffix": "__crop",
+        "interpolation": "nearest",
+    }
+    config = DefenseConfig(type="crop-resize", name="cropping_random", params=params)
+    defense = CropResizeDefense(config)
+    defense.initialize(context, [variant])
+    result_variant = defense.run(context, variant)
+    defense.finalize()
+
+    output_dir = Path(result_variant.data_dir)
+    files = sorted(path for path in output_dir.iterdir() if path.suffix == ".png")
+    assert [path.name for path in files] == ["sample__crop000.png", "sample__crop001.png", "sample__crop002.png"]
+
+    master_seed = np.random.SeedSequence(123)
+    variant_seed = master_seed.spawn(1)[0]
+    image_seed = variant_seed.spawn(1)[0]
+    rng = np.random.default_rng(image_seed)
+
+    expected_crops = []
+    for _ in range(3):
+        left = int(rng.integers(0, 5 - 2 + 1))
+        top = int(rng.integers(0, 5 - 2 + 1))
+        expected_crops.append(arr[top : top + 2, left : left + 2])
+
+    for path, expected in zip(files, expected_crops):
+        observed = np.array(Image.open(path))
+        np.testing.assert_array_equal(observed, expected)
+
+    aggregation_meta = result_variant.metadata.get("aggregation")
+    assert aggregation_meta is not None
+    assert aggregation_meta["method"] == "mean"
+    assert aggregation_meta["num_inputs_per_example"] == 3
+
+
 def test_flip_horizontal(tmp_path):
     arr = np.array(
         [[[255, 0, 0], [0, 255, 0], [0, 0, 255]]],

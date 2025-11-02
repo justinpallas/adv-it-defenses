@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import os
 from pathlib import Path
 from typing import Dict, Iterable, List, Sequence, Tuple
 
+import numpy as np
 import pandas as pd
 import torch
 from PIL import Image
@@ -28,6 +30,41 @@ except ImportError as exc:  # pragma: no cover - dependency hint
 
 
 SUPPORTED_EXTENSIONS = (".png", ".jpg", ".jpeg", ".bmp", ".webp")
+
+
+class MeanPredictionAggregator:
+    """Aggregate multiple predictions per base filename by averaging probabilities."""
+
+    def __init__(self, crop_suffix: str, expected_count: int | None = None) -> None:
+        self.crop_suffix = crop_suffix
+        self.expected_count = expected_count
+        self._sums: Dict[str, np.ndarray] = {}
+        self._counts: Dict[str, int] = {}
+        self.total_members = 0
+
+    def _base_name(self, filename: str) -> str:
+        stem, ext = os.path.splitext(filename)
+        if self.crop_suffix and self.crop_suffix in stem:
+            stem = stem.split(self.crop_suffix)[0]
+        return f"{stem}{ext}"
+
+    def add(self, filename: str, probs: np.ndarray) -> None:
+        base = self._base_name(filename)
+        vector = probs.astype(np.float64, copy=False)
+        if base in self._sums:
+            self._sums[base] += vector
+            self._counts[base] += 1
+        else:
+            self._sums[base] = np.array(vector, copy=True)
+            self._counts[base] = 1
+        self.total_members += 1
+
+    def finalize(self) -> Dict[str, np.ndarray]:
+        return {base: total / float(self._counts[base]) for base, total in self._sums.items()}
+
+    @property
+    def group_count(self) -> int:
+        return len(self._sums)
 
 
 class ExactEvalTransform:
@@ -128,6 +165,17 @@ class TimmInferenceBackend(InferenceBackend):
 
         records: List[dict] = []
 
+        aggregation_cfg = None
+        if isinstance(variant.metadata, dict):
+            aggregation_cfg = variant.metadata.get("aggregation")
+
+        aggregator: MeanPredictionAggregator | None = None
+        if isinstance(aggregation_cfg, dict) and aggregation_cfg.get("method") == "mean":
+            crop_suffix = str(aggregation_cfg.get("crop_suffix", "__crop"))
+            expected = aggregation_cfg.get("num_inputs_per_example")
+            expected_count = int(expected) if isinstance(expected, int) and expected > 0 else None
+            aggregator = MeanPredictionAggregator(crop_suffix, expected_count)
+
         imagenet_info = ImageNetInfo()
         class_map: Dict[int, str]
         label_to_name = None
@@ -161,17 +209,34 @@ class TimmInferenceBackend(InferenceBackend):
                 images = images.to(device)
                 logits = model(images)
                 probabilities = torch.softmax(logits, dim=1)
-                values, indices = probabilities.topk(topk, dim=1)
 
-                for file_name, idx_row, val_row in zip(filenames, indices, values):
-                    record = {
-                        "filename": file_name,
-                    }
-                    for rank, (index, value) in enumerate(zip(idx_row.tolist(), val_row.tolist()), start=1):
-                        record[f"top{rank}_index"] = int(index)
-                        record[f"top{rank}_prob"] = float(value)
-                        record[f"top{rank}_label"] = class_map.get(int(index), str(int(index)))
-                    records.append(record)
+                if aggregator is not None:
+                    for file_name, prob_row in zip(filenames, probabilities):
+                        aggregator.add(file_name, prob_row.detach().cpu().numpy())
+                else:
+                    values, indices = probabilities.topk(topk, dim=1)
+                    for file_name, idx_row, val_row in zip(filenames, indices, values):
+                        record = {
+                            "filename": file_name,
+                        }
+                        for rank, (index, value) in enumerate(zip(idx_row.tolist(), val_row.tolist()), start=1):
+                            record[f"top{rank}_index"] = int(index)
+                            record[f"top{rank}_prob"] = float(value)
+                            record[f"top{rank}_label"] = class_map.get(int(index), str(int(index)))
+                        records.append(record)
+
+        if aggregator is not None:
+            averaged = aggregator.finalize()
+            for file_name in sorted(averaged):
+                avg_probs = averaged[file_name]
+                prob_tensor = torch.from_numpy(avg_probs).float()
+                values, indices = prob_tensor.topk(topk)
+                record = {"filename": file_name}
+                for rank, (index, value) in enumerate(zip(indices.tolist(), values.tolist()), start=1):
+                    record[f"top{rank}_index"] = int(index)
+                    record[f"top{rank}_prob"] = float(value)
+                    record[f"top{rank}_label"] = class_map.get(int(index), str(int(index)))
+                records.append(record)
 
         results_dir = ensure_dir(context.artifacts_dir / "inference" / variant.name)
         predictions_path = results_dir / f"predictions.{output_format}"
@@ -194,6 +259,15 @@ class TimmInferenceBackend(InferenceBackend):
             "topk": topk,
             "num_samples": len(records),
         }
+
+        if aggregator is not None:
+            metadata["aggregation"] = {
+                "method": "mean",
+                "groups": aggregator.group_count,
+                "total_members": aggregator.total_members,
+                "crop_suffix": aggregator.crop_suffix,
+                "expected_per_group": aggregator.expected_count,
+            }
 
         return InferenceResult(
             variant=variant,

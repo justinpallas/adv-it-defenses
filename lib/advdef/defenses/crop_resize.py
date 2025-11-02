@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 import concurrent.futures
-import functools
 import os
 from pathlib import Path
 from typing import Sequence
 
+import numpy as np
 from PIL import Image, ImageFile
+from numpy.random import SeedSequence
 
 from advdef.config import DefenseConfig
 from advdef.core.context import RunContext
@@ -33,7 +34,15 @@ def discover_images(root: Path, patterns: Sequence[str]) -> list[Path]:
     return sorted(paths)
 
 
-def clamp_crop_box(width: int, height: int, crop_w: int, crop_h: int, mode: str) -> tuple[int, int, int, int]:
+def clamp_crop_box(
+    width: int,
+    height: int,
+    crop_w: int,
+    crop_h: int,
+    mode: str,
+    *,
+    rng: np.random.Generator | None = None,
+) -> tuple[int, int, int, int]:
     crop_w = min(crop_w, width)
     crop_h = min(crop_h, height)
 
@@ -49,8 +58,17 @@ def clamp_crop_box(width: int, height: int, crop_w: int, crop_h: int, mode: str)
     elif mode == "bottom-right":
         left = max(0, width - crop_w)
         top = max(0, height - crop_h)
+    elif mode == "random":
+        if rng is None:
+            raise ValueError("Random crop mode requires an RNG.")
+        max_left = max(width - crop_w, 0)
+        max_top = max(height - crop_h, 0)
+        left = int(rng.integers(0, max_left + 1)) if max_left > 0 else 0
+        top = int(rng.integers(0, max_top + 1)) if max_top > 0 else 0
     else:
-        raise ValueError(f"Unsupported crop_mode '{mode}'. Expected one of: center, top-left, bottom-right.")
+        raise ValueError(
+            f"Unsupported crop_mode '{mode}'. Expected one of: center, top-left, bottom-right, random."
+        )
 
     right = left + crop_w
     bottom = top + crop_h
@@ -73,14 +91,22 @@ def parse_size(value: object, *, name: str) -> tuple[int, int] | None:
     return width, height
 
 
-def validate_crop_resize(crop: tuple[int, int] | None, resize: tuple[int, int] | None, *, name: str) -> None:
+def validate_crop_resize(
+    crop: tuple[int, int] | None,
+    resize: tuple[int, int] | None,
+    *,
+    name: str,
+    num_crops: int,
+    crop_mode: str,
+) -> None:
     if crop is not None and resize is not None:
         crop_w, crop_h = crop
         resize_w, resize_h = resize
         if crop_w < resize_w or crop_h < resize_h:
-            print(
-                f"[warn] {name}: crop_size {crop} smaller than resize_size {resize}; image will be upsampled."
-            )
+            if not (num_crops > 1 or crop_mode == "random"):
+                print(
+                    f"[warn] {name}: crop_size {crop} smaller than resize_size {resize}; image will be upsampled."
+                )
 
 
 def transform_image(
@@ -95,34 +121,71 @@ def transform_image(
     overwrite: bool,
     dry_run: bool,
     format_hint: str | None,
-) -> tuple[str, str]:
+    num_crops: int,
+    crop_suffix: str,
+    rng_seed: SeedSequence | int | None,
+) -> tuple[str, list[str]]:
     relative = src.relative_to(input_root)
     destination = output_root / relative
 
     if format_hint:
         destination = destination.with_suffix(f".{format_hint.lower()}")
 
-    if not overwrite and destination.exists():
-        return "skipped", destination.as_posix()
+    if num_crops <= 0:
+        raise ValueError("num_crops must be positive.")
+
+    expected_paths: list[Path]
+    if num_crops == 1:
+        expected_paths = [destination]
+    else:
+        stem = destination.stem
+        suffix = destination.suffix
+        parent = destination.parent
+        expected_paths = [
+            parent / f"{stem}{crop_suffix}{idx:03d}{suffix}"
+            for idx in range(num_crops)
+        ]
+
+    if not overwrite and all(path.exists() for path in expected_paths):
+        return "skipped", [path.as_posix() for path in expected_paths]
 
     if dry_run:
-        return "dry-run", destination.as_posix()
+        return "dry-run", [path.as_posix() for path in expected_paths]
 
     destination.parent.mkdir(parents=True, exist_ok=True)
+
+    rng = np.random.default_rng(rng_seed) if rng_seed is not None else np.random.default_rng()
 
     try:
         with Image.open(src) as img:
             img.load()
 
-            if crop_size is not None:
-                left, top, right, bottom = clamp_crop_box(img.width, img.height, crop_size[0], crop_size[1], crop_mode)
-                if (right - left, bottom - top) != (img.width, img.height):
-                    img = img.crop((left, top, right, bottom))
-                else:
-                    crop_size = None  # indicate no-op for metadata
+            outputs: list[str] = []
 
-            if resize_size is not None:
-                img = img.resize(resize_size, interpolation)
+            if num_crops == 1:
+                working = img
+                if crop_size is not None:
+                    left, top, right, bottom = clamp_crop_box(
+                        img.width, img.height, crop_size[0], crop_size[1], crop_mode, rng=rng if crop_mode == "random" else None
+                    )
+                    if (right - left, bottom - top) != (img.width, img.height):
+                        working = img.crop((left, top, right, bottom))
+
+                if resize_size is not None:
+                    working = working.resize(resize_size, interpolation)
+
+                save_kwargs = {}
+                if format_hint:
+                    save_kwargs["format"] = format_hint.upper()
+                elif img.format:
+                    save_kwargs["format"] = img.format
+
+                working.save(expected_paths[0], **save_kwargs)
+                outputs.append(expected_paths[0].as_posix())
+                return "written", outputs
+
+            if crop_size is None:
+                raise ValueError("crop_size must be provided when num_crops > 1.")
 
             save_kwargs = {}
             if format_hint:
@@ -130,11 +193,25 @@ def transform_image(
             elif img.format:
                 save_kwargs["format"] = img.format
 
-            img.save(destination, **save_kwargs)
-    except Exception as exc:  # pragma: no cover - file system dependent
-        return f"failed: {exc}", destination.as_posix()
+            for idx, path in enumerate(expected_paths):
+                left, top, right, bottom = clamp_crop_box(
+                    img.width,
+                    img.height,
+                    crop_size[0],
+                    crop_size[1],
+                    crop_mode,
+                    rng=rng,
+                )
+                crop = img.crop((left, top, right, bottom))
 
-    return "written", destination.as_posix()
+                if resize_size is not None:
+                    crop = crop.resize(resize_size, interpolation)
+
+                crop.save(path, **save_kwargs)
+                outputs.append(path.as_posix())
+            return "written", outputs
+    except Exception as exc:  # pragma: no cover - file system dependent
+        return f"failed: {exc}", [path.as_posix() for path in expected_paths]
 
 
 @register_defense("crop-resize")
@@ -147,6 +224,7 @@ class CropResizeDefense(Defense):
         self._progress: Progress | None = None
         self._variant_images: dict[str, list[Path]] = {}
         self._params_cache: dict[str, object] | None = None
+        self._variant_image_seeds: dict[str, list[SeedSequence | None]] = {}
 
     def _get_params(self) -> dict[str, object]:
         if self._params_cache is None:
@@ -154,8 +232,11 @@ class CropResizeDefense(Defense):
             patterns = tuple(params.get("extensions", ("*.png", "*.jpg", "*.jpeg", "*.bmp")))
             crop_size = parse_size(params.get("crop_size"), name="crop_size")
             resize_size = parse_size(params.get("resize_size"), name="resize_size")
-            validate_crop_resize(crop_size, resize_size, name="crop-resize")
+            num_crops = int(params.get("num_crops", 1))
+            if num_crops <= 0:
+                raise ValueError("num_crops must be positive.")
             crop_mode = str(params.get("crop_mode", "center")).lower()
+            validate_crop_resize(crop_size, resize_size, name="crop-resize", num_crops=num_crops, crop_mode=crop_mode)
             interpolation_name = str(params.get("interpolation", "bilinear")).lower()
             interpolation = INTERPOLATION_MODES.get(interpolation_name)
             if interpolation is None:
@@ -168,6 +249,9 @@ class CropResizeDefense(Defense):
             dry_run = bool(params.get("dry_run", False))
             format_hint = params.get("format")
             workers = int(params.get("workers", max(1, (os.cpu_count() or 2) - 1)))
+            crop_suffix = str(params.get("crop_suffix", "__crop"))
+            seed_param = params.get("seed")
+            seed = int(seed_param) if seed_param is not None else None
 
             self._params_cache = {
                 "patterns": patterns,
@@ -180,6 +264,9 @@ class CropResizeDefense(Defense):
                 "dry_run": dry_run,
                 "format_hint": format_hint,
                 "workers": workers,
+                "num_crops": num_crops,
+                "crop_suffix": crop_suffix,
+                "seed": seed,
             }
         return self._params_cache
 
@@ -188,14 +275,30 @@ class CropResizeDefense(Defense):
         patterns = details["patterns"]  # type: ignore[index]
 
         self._variant_images = {}
+        self._variant_image_seeds = {}
         total_images = 0
         min_width: int | None = None
         min_height: int | None = None
-        for variant in variants:
+
+        keep_seed = details["seed"]  # type: ignore[index]
+        num_crops = details["num_crops"]  # type: ignore[index]
+
+        if keep_seed is not None and (num_crops > 1 or details["crop_mode"] == "random"):
+            master_seed = SeedSequence(keep_seed)
+            variant_seed_sequences = master_seed.spawn(len(variants))
+        else:
+            variant_seed_sequences = [None] * len(variants)
+
+        for idx, variant in enumerate(variants):
             images = discover_images(Path(variant.data_dir), patterns)
             if not images:
                 raise FileNotFoundError(f"No images matched the provided extensions in {variant.data_dir}.")
             self._variant_images[variant.name] = images
+            variant_seed = variant_seed_sequences[idx] if idx < len(variant_seed_sequences) else None
+            if isinstance(variant_seed, SeedSequence) and images:
+                self._variant_image_seeds[variant.name] = variant_seed.spawn(len(images))
+            else:
+                self._variant_image_seeds[variant.name] = [None] * len(images)
             total_images += len(images)
 
             try:
@@ -216,7 +319,8 @@ class CropResizeDefense(Defense):
                 "[info] Crop-Resize defense settings: "
                 f"crop_size={crop_size}, crop_mode={details['crop_mode']}, "
                 f"resize_size={resize_size}, interpolation={details['interpolation_name']}, "
-                f"overwrite={details['overwrite']}, dry_run={details['dry_run']}, "
+                f"num_crops={details['num_crops']}, crop_suffix={details['crop_suffix']}, "
+                f"seed={details['seed']}, overwrite={details['overwrite']}, dry_run={details['dry_run']}, "
                 f"workers={details['workers']}, format={details['format_hint']}"
             )
             self._settings_reported = True
@@ -244,6 +348,9 @@ class CropResizeDefense(Defense):
         dry_run = details["dry_run"]  # type: ignore[index]
         format_hint = details["format_hint"]
         workers = details["workers"]  # type: ignore[index]
+        num_crops = details["num_crops"]  # type: ignore[index]
+        crop_suffix = details["crop_suffix"]  # type: ignore[index]
+        seed_value = details["seed"]  # type: ignore[index]
 
         input_dir = Path(variant.data_dir)
         output_root = ensure_dir(context.artifacts_dir / "defenses" / "crop-resize" / variant.name)
@@ -262,32 +369,42 @@ class CropResizeDefense(Defense):
             progress = Progress(total=len(images), description="Crop/Resize", unit="images")
             self._progress = progress
 
-        task = functools.partial(
-            transform_image,
-            crop_size=crop_size,
-            crop_mode=crop_mode,
-            resize_size=resize_size,
-            interpolation=interpolation,
-            output_root=output_root,
-            input_root=input_dir,
-            overwrite=overwrite,
-            dry_run=dry_run,
-            format_hint=format_hint,
-        )
+        image_seeds = self._variant_image_seeds.get(variant.name)
+        if image_seeds is None or len(image_seeds) != len(images):
+            image_seeds = [None] * len(images)
+            self._variant_image_seeds[variant.name] = image_seeds
+
+        def task(src: Path, rng_seed: SeedSequence | None) -> tuple[str, list[str]]:
+            return transform_image(
+                src,
+                crop_size=crop_size,
+                crop_mode=crop_mode,
+                resize_size=resize_size,
+                interpolation=interpolation,
+                output_root=output_root,
+                input_root=input_dir,
+                overwrite=overwrite,
+                dry_run=dry_run,
+                format_hint=format_hint,
+                num_crops=num_crops,
+                crop_suffix=crop_suffix,
+                rng_seed=rng_seed,
+            )
 
         written = skipped = failed = 0
 
         with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as executor:
-            for status, path in executor.map(task, images):
+            for status, paths in executor.map(task, images, image_seeds):
                 if status == "written":
-                    written += 1
+                    written += len(paths)
                 elif status == "skipped":
-                    skipped += 1
+                    skipped += len(paths)
                 elif status == "dry-run":
-                    print(f"[dry-run] would write {path}")
+                    for path in paths:
+                        print(f"[dry-run] would write {path}")
                 else:
-                    failed += 1
-                    print(f"[warn] Failed to transform {path}: {status}")
+                    failed += len(paths)
+                    print(f"[warn] Failed to transform {paths}: {status}")
                 progress.update()
 
         metadata = {
@@ -297,11 +414,21 @@ class CropResizeDefense(Defense):
             "resize_size": resize_size,
             "interpolation": details["interpolation_name"],
             "format": format_hint,
+            "num_crops": num_crops,
+            "crop_suffix": crop_suffix,
+            "seed": seed_value,
             "written": written,
             "skipped": skipped,
             "failed": failed,
             "source_variant": variant.name,
         }
+
+        if num_crops > 1:
+            metadata["aggregation"] = {
+                "method": "mean",
+                "crop_suffix": crop_suffix,
+                "num_inputs_per_example": num_crops,
+            }
 
         return DatasetVariant(
             name=f"{variant.name}-crop-resize",
@@ -315,6 +442,7 @@ class CropResizeDefense(Defense):
             self._progress.close()
             self._progress = None
         self._variant_images.clear()
+        self._variant_image_seeds.clear()
 
 
 __all__ = ["CropResizeDefense"]
