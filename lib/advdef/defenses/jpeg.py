@@ -15,6 +15,7 @@ from advdef.core.context import RunContext
 from advdef.core.pipeline import DatasetVariant, Defense
 from advdef.core.registry import register_defense
 from advdef.utils import Progress, ensure_dir
+from ._common import build_config_identifier
 
 ImageFile.LOAD_TRUNCATED_IMAGES = True
 
@@ -75,6 +76,7 @@ class JPEGDefense(Defense):
         self._progress: Progress | None = None
         self._variant_images: dict[str, list[Path]] = {}
         self._params_cache: dict[str, object] | None = None
+        self._config_identifier = build_config_identifier(config, default_prefix="jpeg")
 
     def _get_params(self) -> dict[str, object]:
         if self._params_cache is None:
@@ -115,6 +117,7 @@ class JPEGDefense(Defense):
         if not self._settings_reported:
             print(
                 "[info] JPEG defense settings: "
+                f"config={self.config.name or self._config_identifier} "
                 f"quality={params['quality']}, progressive={params['progressive']}, optimize={params['optimize']}, "
                 f"overwrite={params['overwrite']}, dry_run={params['dry_run']}, workers={params['workers']}"
             )
@@ -135,7 +138,9 @@ class JPEGDefense(Defense):
         workers = params["workers"]  # type: ignore[index]
 
         input_dir = Path(variant.data_dir)
-        output_root = ensure_dir(context.artifacts_dir / "defenses" / "jpeg" / variant.name)
+        output_root = ensure_dir(
+            context.artifacts_dir / "defenses" / "jpeg" / variant.name / self._config_identifier
+        )
 
         images = self._variant_images.get(variant.name)
         if images is None:
@@ -183,10 +188,12 @@ class JPEGDefense(Defense):
             "skipped": skipped,
             "failed": failed,
             "source_variant": variant.name,
+            "config_name": self.config.name,
+            "config_identifier": self._config_identifier,
         }
 
         return DatasetVariant(
-            name=f"{variant.name}-jpeg",
+            name=f"{variant.name}-jpeg-{self._config_identifier}",
             data_dir=str(output_root),
             parent=variant.name,
             metadata=metadata,

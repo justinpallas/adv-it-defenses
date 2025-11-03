@@ -15,6 +15,7 @@ from advdef.core.context import RunContext
 from advdef.core.pipeline import DatasetVariant, Defense
 from advdef.core.registry import register_defense
 from advdef.utils import Progress, ensure_dir
+from ._common import build_config_identifier
 
 ImageFile.LOAD_TRUNCATED_IMAGES = True
 
@@ -80,6 +81,7 @@ class GrayscaleDefense(Defense):
         self._progress: Progress | None = None
         self._variant_images: dict[str, list[Path]] = {}
         self._params_cache: dict[str, object] | None = None
+        self._config_identifier = build_config_identifier(config, default_prefix="grayscale")
 
     def _get_params(self) -> dict[str, object]:
         if self._params_cache is None:
@@ -123,6 +125,7 @@ class GrayscaleDefense(Defense):
         if not self._settings_reported:
             print(
                 "[info] Grayscale defense settings: "
+                f"config={self.config.name or self._config_identifier} "
                 f"mode={params['mode']}, replicate_rgb={params['replicate_rgb']}, format={params['format_hint']}, "
                 f"overwrite={params['overwrite']}, dry_run={params['dry_run']}, workers={params['workers']}"
             )
@@ -143,7 +146,9 @@ class GrayscaleDefense(Defense):
         workers = params["workers"]  # type: ignore[index]
 
         input_dir = Path(variant.data_dir)
-        output_root = ensure_dir(context.artifacts_dir / "defenses" / "grayscale" / variant.name)
+        output_root = ensure_dir(
+            context.artifacts_dir / "defenses" / "grayscale" / variant.name / self._config_identifier
+        )
 
         images = self._variant_images.get(variant.name)
         if images is None:
@@ -190,12 +195,14 @@ class GrayscaleDefense(Defense):
             "skipped": skipped,
             "failed": failed,
             "source_variant": variant.name,
+            "config_name": self.config.name,
+            "config_identifier": self._config_identifier,
         }
         if format_hint:
             metadata["format"] = format_hint
 
         return DatasetVariant(
-            name=f"{variant.name}-grayscale",
+            name=f"{variant.name}-grayscale-{self._config_identifier}",
             data_dir=str(output_root),
             parent=variant.name,
             metadata=metadata,

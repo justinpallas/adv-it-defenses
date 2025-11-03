@@ -19,6 +19,7 @@ from advdef.core.context import RunContext
 from advdef.core.pipeline import DatasetVariant, Defense
 from advdef.core.registry import register_defense
 from advdef.utils import Progress, ensure_dir
+from ._common import build_config_identifier
 
 DEFAULT_IMAGE_FILENAME = "0000001.png"
 DEFAULT_CAMERA_ID = 1
@@ -298,6 +299,10 @@ class RSMoEDefense(Defense):
         self._recon_progress: Progress | None = None
         self._variant_images: dict[str, list[Path]] = {}
         self._params_cache: dict[str, object] | None = None
+        self._config_identifier = self._build_config_identifier()
+
+    def _build_config_identifier(self) -> str:
+        return build_config_identifier(self.config, default_prefix=self.config.type or "r-smoe")
 
     def _get_params(self) -> dict[str, object]:
         if self._params_cache is None:
@@ -383,6 +388,7 @@ class RSMoEDefense(Defense):
             file_prefix_display = file_name_prefix_param if file_name_prefix_param is not None else "<variant>"
             print(
                 "[info] R-SMOE settings: "
+                f"config={self.config.name or self._config_identifier} "
                 f"root={r_smoe_root} mode={mode} iterations={iterations} npcs={npcs} "
                 f"n_multi_model={n_multi_model_display} skip_existing={skip_existing} "
                 f"file_prefix={file_prefix_display} extra_args={extra_args_display} "
@@ -415,7 +421,9 @@ class RSMoEDefense(Defense):
 
         file_name_prefix = file_name_prefix_param if file_name_prefix_param is not None else variant.name
 
-        variant_root = ensure_dir(context.artifacts_dir / "defenses" / "r-smoe" / variant.name)
+        variant_root = ensure_dir(
+            context.artifacts_dir / "defenses" / "r-smoe" / variant.name / self._config_identifier
+        )
         prepared_root = ensure_dir(variant_root / "prepared")
         models_root = ensure_dir(variant_root / "models")
         recon_root = ensure_dir(variant_root / "reconstructed")
@@ -507,12 +515,15 @@ class RSMoEDefense(Defense):
             "recon_root": recon_root.as_posix(),
             "source_variant": variant.name,
             "image_hw": variant.metadata.get("image_hw"),
+            "config_name": self.config.name,
+            "config_identifier": self._config_identifier,
+            "file_name_prefix": file_name_prefix,
         }
         if n_multi_model is not None:
             metadata["n_multi_model"] = n_multi_model
 
         return DatasetVariant(
-            name=f"{variant.name}-r-smoe",
+            name=f"{variant.name}-r-smoe-{self._config_identifier}",
             data_dir=str(recon_root),
             parent=variant.name,
             metadata=metadata,

@@ -24,6 +24,7 @@ from advdef.core.context import RunContext
 from advdef.core.pipeline import DatasetVariant, Defense
 from advdef.core.registry import register_defense
 from advdef.utils import Progress, ensure_dir
+from ._common import build_config_identifier
 
 ImageFile.LOAD_TRUNCATED_IMAGES = True
 
@@ -176,6 +177,7 @@ class TVMDefense(Defense):
         self._variant_images: dict[str, list[Path]] = {}
         self._params_cache: dict[str, object] | None = None
         self._variant_image_seeds: dict[str, list[SeedSequence | None]] = {}
+        self._config_identifier = build_config_identifier(config, default_prefix="tvm")
 
     def _get_params(self) -> dict[str, object]:
         if self._params_cache is None:
@@ -253,6 +255,7 @@ class TVMDefense(Defense):
         if not self._settings_reported:
             print(
                 "[info] TVM defense settings: "
+                f"config={self.config.name or self._config_identifier} "
                 f"weight={details['weight']}, eps={details['eps']}, n_iter_max={details['n_iter_max']}, "
                 f"multichannel={details['multichannel']}, overwrite={details['overwrite']}, "
                 f"dry_run={details['dry_run']}, workers={details['workers']}, format={details['format_hint']}, "
@@ -281,7 +284,9 @@ class TVMDefense(Defense):
         seed_value = details["seed"]  # type: ignore[index]
 
         input_dir = Path(variant.data_dir)
-        output_root = ensure_dir(context.artifacts_dir / "defenses" / "tvm" / variant.name)
+        output_root = ensure_dir(
+            context.artifacts_dir / "defenses" / "tvm" / variant.name / self._config_identifier
+        )
 
         images = self._variant_images.get(variant.name)
         if images is None:
@@ -353,10 +358,12 @@ class TVMDefense(Defense):
             "skipped": skipped,
             "failed": failed,
             "source_variant": variant.name,
+            "config_name": self.config.name,
+            "config_identifier": self._config_identifier,
         }
 
         return DatasetVariant(
-            name=f"{variant.name}-tvm",
+            name=f"{variant.name}-tvm-{self._config_identifier}",
             data_dir=str(output_root),
             parent=variant.name,
             metadata=metadata,
