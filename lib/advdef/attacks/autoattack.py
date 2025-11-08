@@ -14,9 +14,9 @@ from advdef.config import AttackConfig
 from advdef.core.context import RunContext
 from advdef.core.pipeline import Attack, DatasetArtifacts, DatasetVariant
 from advdef.core.registry import register_attack
+from advdef.core.samples import SampleInfo
 from advdef.datasets.imagenet_autoattack import (
     NormalizedModel,
-    SampleInfo,
     build_transform,
     load_image,
     save_images,

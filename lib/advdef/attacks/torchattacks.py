@@ -14,7 +14,8 @@ from advdef.config import AttackConfig
 from advdef.core.context import RunContext
 from advdef.core.pipeline import Attack, DatasetArtifacts, DatasetVariant
 from advdef.core.registry import register_attack
-from advdef.datasets.imagenet_autoattack import SampleInfo, build_transform, load_image, write_manifest
+from advdef.core.samples import SampleInfo
+from advdef.datasets.imagenet_autoattack import build_transform, load_image, write_manifest
 from advdef.utils import Progress, ensure_dir, normalized_l2, summarize_tensor
 
 try:

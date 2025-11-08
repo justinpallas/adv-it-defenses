@@ -8,7 +8,6 @@ import shutil
 import tarfile
 import time
 import urllib.request
-from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Sequence
 
@@ -21,6 +20,7 @@ from torchvision.transforms import InterpolationMode
 from advdef.config import DatasetConfig
 from advdef.core.context import RunContext
 from advdef.core.pipeline import DatasetArtifacts, DatasetBuilder
+from advdef.core.samples import SampleInfo
 from advdef.core.registry import register_dataset
 from advdef.utils import Progress, ensure_dir
 
@@ -37,14 +37,6 @@ try:
     from advdef.datasets.imagenet_labels import load_ground_truth_labels
 except ModuleNotFoundError:
     raise
-
-
-@dataclass
-class SampleInfo:
-    path: Path
-    predicted_label: int
-    confidence: float
-    target_label: Optional[int] = None
 
 
 class NormalizedModel(nn.Module):

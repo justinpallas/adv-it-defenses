@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import copy
+import hashlib
 import json
+import logging
 import subprocess
 import sys
 from pathlib import Path
@@ -15,7 +17,6 @@ from advdef.config import ExperimentConfig
 from advdef.core.context import RunContext
 from advdef.core.pipeline import Pipeline
 from advdef.utils import capture_environment, load_yaml_file, utc_timestamp
-import logging
 
 
 def _slugify(text: str) -> str:
@@ -27,6 +28,16 @@ def _slugify(text: str) -> str:
 def _load_experiment(config_path: Path) -> ExperimentConfig:
     raw_config = load_yaml_file(config_path)
     return ExperimentConfig.model_validate(raw_config)
+
+
+def _config_digest(experiment: ExperimentConfig) -> str:
+    payload = experiment.model_dump(mode="json")
+    serialized = json.dumps(payload, sort_keys=True)
+    return hashlib.sha256(serialized.encode("utf-8")).hexdigest()
+
+
+def _directory_has_contents(path: Path) -> bool:
+    return path.exists() and any(path.iterdir())
 
 
 def _apply_overrides(config: dict, overrides: Dict[str, object]) -> dict:
@@ -66,10 +77,20 @@ def _execute_experiment(
     run_name: str | None = None,
     context_options: Dict[str, object] | None = None,
     log_level: str = "warning",
+    resume: bool = False,
 ) -> Tuple[str, dict]:
     timestamp = utc_timestamp()
     run_id = run_name or f"{timestamp}_{_slugify(experiment.name)}"
     run_dir = experiment.run_directory(run_id)
+
+    if resume and run_name is None:
+        raise click.ClickException("--resume requires --run-name.")
+    if resume and not run_dir.exists():
+        raise click.ClickException(f"Cannot resume run '{run_id}' because {run_dir} does not exist.")
+    if not resume and _directory_has_contents(run_dir):
+        raise click.ClickException(
+            f"Run directory {run_dir} already exists. Use --run-name for a new run ID or --resume to continue it."
+        )
 
     logging.basicConfig(level=getattr(logging, log_level.upper(), logging.WARNING))
 
@@ -80,7 +101,34 @@ def _execute_experiment(
         timestamp=timestamp,
         work_dir=Path.cwd(),
         options=context_options or {},
+        resume=resume,
     )
+
+    stored_timestamp = context.state.get("timestamp")
+    if stored_timestamp:
+        context.timestamp = stored_timestamp
+    else:
+        context.state["timestamp"] = context.timestamp
+
+    digest = _config_digest(experiment)
+    existing_digest = context.state.get("config_digest")
+    if existing_digest and existing_digest != digest:
+        raise click.ClickException(
+            "Experiment configuration has changed since this run started. "
+            "Start a new run or delete the existing directory."
+        )
+    context.state.setdefault("config_digest", digest)
+    context.state.setdefault("steps", {})
+    context.state["run_id"] = run_id
+
+    if resume and context.state.get("status") == "completed" and context.metrics_path.exists():
+        with context.metrics_path.open("r") as handle:
+            metrics = json.load(handle)
+        click.echo(f"Run '{run_id}' already completed. Returning stored metrics.")
+        return run_id, metrics
+
+    context.state["status"] = "running"
+    context.save_state()
     context.save_config()
 
     click.echo(f"Running experiment '{experiment.name}' (run id: {run_id})")
@@ -94,8 +142,11 @@ def _execute_experiment(
         "environment": capture_environment(),
         "metrics": metrics,
         "variants": pipeline.variant_records,
+        "resumed": bool(resume),
     }
     context.save_metadata(metadata)
+    context.state["status"] = "completed"
+    context.save_state()
 
     return run_id, metrics
 
@@ -120,8 +171,15 @@ def app() -> None:
     default="warning",
     help="Set logging verbosity for the run (warning/info/debug).",
 )
-def run(config: Path, run_name: str | None, imagenet_root: Path | None, log_level: str) -> None:
+@click.option(
+    "--resume/--no-resume",
+    default=False,
+    help="Resume an unfinished run (requires --run-name).",
+)
+def run(config: Path, run_name: str | None, imagenet_root: Path | None, log_level: str, resume: bool) -> None:
     """Run a single experiment using the provided YAML configuration file."""
+    if resume and not run_name:
+        raise click.ClickException("--resume requires --run-name.")
     experiment = _load_experiment(config)
     run_id, metrics = _execute_experiment(
         config,
@@ -129,6 +187,7 @@ def run(config: Path, run_name: str | None, imagenet_root: Path | None, log_leve
         run_name=run_name,
         context_options={"imagenet_root": imagenet_root} if imagenet_root else None,
         log_level=log_level,
+        resume=resume,
     )
     click.echo(f"Experiment finished. Run id: {run_id}")
     click.echo(json.dumps(metrics, indent=2))
@@ -148,7 +207,12 @@ def run(config: Path, run_name: str | None, imagenet_root: Path | None, log_leve
     default="warning",
     help="Set logging verbosity for the run (warning/info/debug).",
 )
-def queue(queue: Path, imagenet_root: Path | None, log_level: str) -> None:
+@click.option(
+    "--resume/--no-resume",
+    default=False,
+    help="Resume jobs that define run_name entries rather than starting over.",
+)
+def queue(queue: Path, imagenet_root: Path | None, log_level: str, resume: bool) -> None:
     """Execute multiple experiments described in a queue YAML file."""
     queue_data = load_yaml_file(queue)
     jobs = queue_data.get("jobs", [])
@@ -169,12 +233,18 @@ def queue(queue: Path, imagenet_root: Path | None, log_level: str) -> None:
         experiment = ExperimentConfig.model_validate(raw_config)
         run_name = job.get("run_name")
         click.echo(f"[{idx}/{len(jobs)}] {experiment.name}")
+        job_resume = resume and run_name is not None
+        if resume and run_name is None:
+            click.echo(
+                f"[warn] Job {idx} has no run_name; starting a new run instead of resuming."
+            )
         run_id, _ = _execute_experiment(
             config_file,
             experiment,
             run_name=run_name,
             context_options={"imagenet_root": imagenet_root} if imagenet_root else None,
             log_level=log_level,
+            resume=job_resume,
         )
         results.append((experiment.name, run_id))
 

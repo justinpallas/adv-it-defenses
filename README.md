@@ -73,6 +73,13 @@ advdef run configs/resnet50_autoattack.yaml
 advdef run configs/resnet50_autoattack.yaml --log-level info
 ```
 
+Resume a partially completed run by reusing its `--run-name` and adding `--resume`. Cached artifacts
+allow the pipeline to skip completed stages:
+
+```bash
+advdef run configs/resnet50_autoattack.yaml --run-name 20240122_resnet50_autoattack --resume
+```
+
 When you already have the validation set/devkit stored elsewhere, pass
 `--imagenet-root /path/to/imagenet` to reuse it without editing configs.
 
@@ -88,7 +95,8 @@ advdef queue configs/queues/sample_queue.yaml
 ```
 
 Each job resolves its referenced config, applies overrides, and runs sequentially
-by default.
+by default. Provide `--resume` when re-running a queue that specifies `run_name`
+values to continue unfinished jobs without repeating completed ones.
 
 ## 🙏 Acknowledgements
 

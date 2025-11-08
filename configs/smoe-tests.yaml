@@ -1,0 +1,162 @@
+name: smoe-tests
+description: >
+  This experiments tests various settings for the R-SMoE defense to find the optimal parameters.
+seed: 123
+work_dir: runs
+dataset:
+  type: imagenet-autoattack
+  name: imagenet_subset
+  params:
+    count: 200
+    min_confidence: 0.0
+    require_correct: false
+    batch_size: 16
+    seed: 123
+  attacks:
+    - type: autoattack
+      name: autoattack_linf
+      params:
+        attacks: ["apgd-ce", "square"]
+        eps: 0.05
+        norm: Linf
+        batch_size: 8
+        device: cuda
+    - type: cw-l2
+      name: cw_l2
+      params:
+        cw_c: 0.03
+        cw_lr: 0.01
+        cw_confidence: 0.0
+        cw_steps: 200
+        batch_size: 4
+        device: cuda
+    - type: deepfool
+      name: deepfool
+      params:
+        steps: 100
+        overshoot: 0.05
+        batch_size: 4
+        device: cuda
+model:
+  type: timm
+  params:
+    architecture: resnet50
+    pretrained: true
+inference:
+  type: timm
+  params:
+    batch_size: 64
+    device: auto
+    topk: 5
+defenses:
+  # Single Model
+  - type: r-smoe
+    name: 1000-kernels_500-iterations
+    params:
+      root: external/r-smoe
+      mode: standard
+      iterations: 500
+      npcs: 1000
+      file_name_prefix: k-1000_it-500
+  - type: r-smoe
+    name: 5000-kernels_500-iterations
+    params:
+      root: external/r-smoe
+      mode: standard
+      iterations: 500
+      npcs: 5000
+      file_name_prefix: k-5000_it-500
+  - type: r-smoe
+    name: 1000-kernels_2000-iterations
+    params:
+      root: external/r-smoe
+      mode: standard
+      iterations: 2000
+      npcs: 1000
+      file_name_prefix: k-1000_it-2000
+  - type: r-smoe
+    name: 5000-kernels_2000-iterations
+    params:
+      root: external/r-smoe
+      mode: standard
+      iterations: 2000
+      npcs: 5000
+      file_name_prefix: k-5000_it-2000
+  # Multi Model - Ensemble of 8
+  - type: r-smoe
+    name: 1000-kernels_500-iterations_multi-model-8
+    params:
+      root: external/r-smoe
+      mode: denoise
+      n_multi_model: 8
+      iterations: 500
+      npcs: 1000
+      file_name_prefix: k-1000_it-500_mm-8
+  - type: r-smoe
+    name: 5000-kernels_500-iterations_multi-model-8
+    params:
+      root: external/r-smoe
+      mode: denoise
+      n_multi_model: 8
+      iterations: 500
+      npcs: 5000
+      file_name_prefix: k-5000_it-500_mm-8
+  - type: r-smoe
+    name: 1000-kernels_2000-iterations_multi-model-8
+    params:
+      root: external/r-smoe
+      mode: denoise
+      n_multi_model: 8
+      iterations: 2000
+      npcs: 1000
+      file_name_prefix: k-1000_it-2000_mm-8
+  - type: r-smoe
+    name: 5000-kernels_2000-iterations_multi-model-8
+    params:
+      root: external/r-smoe
+      mode: denoise
+      n_multi_model: 8
+      iterations: 2000
+      npcs: 5000
+      file_name_prefix: k-5000_it-2000_mm-8
+  # Multi Model - Ensemble of 64
+  - type: r-smoe
+    name: 1000-kernels_500-iterations_multi-model-64
+    params:
+      root: external/r-smoe
+      mode: denoise
+      n_multi_model: 64
+      iterations: 500
+      npcs: 1000
+      file_name_prefix: k-1000_it-500_mm-64
+  - type: r-smoe
+    name: 5000-kernels_500-iterations_multi-model-64
+    params:
+      root: external/r-smoe
+      mode: denoise
+      n_multi_model: 64
+      iterations: 500
+      npcs: 5000
+      file_name_prefix: k-5000_it-500_mm-64
+  - type: r-smoe
+    name: 1000-kernels_2000-iterations_multi-model-64
+    params:
+      root: external/r-smoe
+      mode: denoise
+      n_multi_model: 64
+      iterations: 2000
+      npcs: 1000
+      file_name_prefix: k-1000_it-2000_mm-64
+  - type: r-smoe
+    name: 5000-kernels_2000-iterations_multi-model-64
+    params:
+      root: external/r-smoe
+      mode: denoise
+      n_multi_model: 64
+      iterations: 2000
+      npcs: 5000
+      file_name_prefix: k-5000_it-2000_mm-64
+evaluation:
+  type: imagenet
+  params:
+    topk: [1, 5]

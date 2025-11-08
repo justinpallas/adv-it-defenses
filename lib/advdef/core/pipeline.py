@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from typing import Any, Dict, Iterable, List
@@ -15,6 +16,7 @@ from advdef.config import (
     ModelConfig,
 )
 from advdef.core.context import RunContext
+from advdef.core.samples import SampleInfo, deserialize_sample_infos, serialize_sample_infos
 from advdef.core.registry import (
     ATTACKS,
     DATASETS,
@@ -32,6 +34,22 @@ class DatasetArtifacts:
     labels_path: str | None = None
     metadata: Dict[str, Any] = field(default_factory=dict)
 
+    def to_state(self) -> Dict[str, Any]:
+        return {
+            "clean_dir": self.clean_dir,
+            "labels_path": self.labels_path,
+            "metadata": _prepare_metadata_for_state(self.metadata),
+        }
+
+    @classmethod
+    def from_state(cls, payload: Dict[str, Any]) -> "DatasetArtifacts":
+        metadata = _restore_metadata_from_state(payload.get("metadata", {}))
+        return cls(
+            clean_dir=payload["clean_dir"],
+            labels_path=payload.get("labels_path"),
+            metadata=metadata,
+        )
+
 
 @dataclass
 class DatasetVariant:
@@ -42,6 +60,24 @@ class DatasetVariant:
     parent: str | None = None
     metadata: Dict[str, Any] = field(default_factory=dict)
 
+    def to_state(self) -> Dict[str, Any]:
+        return {
+            "name": self.name,
+            "data_dir": self.data_dir,
+            "parent": self.parent,
+            "metadata": _prepare_metadata_for_state(self.metadata),
+        }
+
+    @classmethod
+    def from_state(cls, payload: Dict[str, Any]) -> "DatasetVariant":
+        metadata = _restore_metadata_from_state(payload.get("metadata", {}))
+        return cls(
+            name=payload["name"],
+            data_dir=payload["data_dir"],
+            parent=payload.get("parent"),
+            metadata=metadata,
+        )
+
 
 @dataclass
 class InferenceResult:
@@ -50,6 +86,45 @@ class InferenceResult:
     variant: DatasetVariant
     predictions_path: str
     metadata: Dict[str, Any] = field(default_factory=dict)
+
+    def to_state(self) -> Dict[str, Any]:
+        return {
+            "predictions_path": self.predictions_path,
+            "metadata": copy.deepcopy(self.metadata),
+        }
+
+    @classmethod
+    def from_state(cls, variant: DatasetVariant, payload: Dict[str, Any]) -> "InferenceResult":
+        return cls(
+            variant=variant,
+            predictions_path=payload["predictions_path"],
+            metadata=copy.deepcopy(payload.get("metadata", {})),
+        )
+
+
+def _prepare_metadata_for_state(metadata: Dict[str, Any]) -> Dict[str, Any]:
+    prepared = copy.deepcopy(metadata)
+    samples = prepared.get("samples")
+    if isinstance(samples, list) and samples and isinstance(samples[0], SampleInfo):
+        prepared["samples"] = serialize_sample_infos(samples)
+    return prepared
+
+
+def _restore_metadata_from_state(metadata: Dict[str, Any]) -> Dict[str, Any]:
+    restored = copy.deepcopy(metadata)
+    samples = restored.get("samples")
+    if (
+        isinstance(samples, list)
+        and samples
+        and isinstance(samples[0], dict)
+        and "path" in samples[0]
+        and "predicted_label" in samples[0]
+    ):
+        try:
+            restored["samples"] = deserialize_sample_infos(samples)
+        except (TypeError, KeyError):
+            pass
+    return restored
 
 
 class PipelineStep(ABC):
@@ -132,15 +207,32 @@ class Pipeline:
         self.context = context
         self.config = context.experiment
         self.variant_records: List[Dict[str, Any]] = []
+        self._steps_state = self.context.state.setdefault("steps", {})
+        self._resume_enabled = bool(self.context.resume)
 
     def build_dataset(self) -> DatasetArtifacts:
+        cached = self._steps_state.get("dataset")
+        if self._resume_enabled and cached:
+            return DatasetArtifacts.from_state(cached)
+
         dataset_cls = DATASETS.get(self.config.dataset.type)
         builder: DatasetBuilder = dataset_cls(self.config.dataset)
-        return builder.run(self.context)
+        dataset = builder.run(self.context)
+        self._steps_state["dataset"] = dataset.to_state()
+        self.context.save_state()
+        return dataset
 
     def run_attacks(
         self, dataset: DatasetArtifacts
     ) -> List[DatasetVariant]:
+        cached = self._steps_state.get("attacks")
+        if (
+            self._resume_enabled
+            and cached
+            and isinstance(cached.get("variants"), list)
+        ):
+            return [DatasetVariant.from_state(entry) for entry in cached["variants"]]
+
         variants: List[DatasetVariant] = [
             DatasetVariant(
                 name="baseline",
@@ -156,9 +248,19 @@ class Pipeline:
             attack: Attack = attack_cls(attack_cfg)
             produced = list(attack.run(self.context, dataset))
             variants.extend(produced)
+        self._steps_state["attacks"] = {"variants": [variant.to_state() for variant in variants]}
+        self.context.save_state()
         return variants
 
     def run_defenses(self, variants: Iterable[DatasetVariant]) -> List[DatasetVariant]:
+        cached = self._steps_state.get("defenses")
+        if (
+            self._resume_enabled
+            and cached
+            and isinstance(cached.get("variants"), list)
+        ):
+            return [DatasetVariant.from_state(entry) for entry in cached["variants"]]
+
         base_variants: List[DatasetVariant] = list(variants)
         defended: List[DatasetVariant] = []
 
@@ -177,15 +279,26 @@ class Pipeline:
             if hasattr(defense, "finalize"):
                 defense.finalize()
 
+        self._steps_state["defenses"] = {"variants": [variant.to_state() for variant in defended]}
+        self.context.save_state()
         return defended
 
-    def run_inference(self, variants: Iterable[DatasetVariant]) -> List[InferenceResult]:
+    def run_inference(self, variants: Iterable[DatasetVariant], namespace: str) -> List[InferenceResult]:
         inference_cls = INFERENCE_BACKENDS.get(self.config.inference.type)
         backend: InferenceBackend = inference_cls(self.config.inference, self.config.model)
+        inference_state = self._steps_state.setdefault("inference", {})
+        namespace_state: Dict[str, Dict[str, Any]] = inference_state.setdefault(namespace, {})
         results: List[InferenceResult] = []
         for variant in variants:
+            cached = namespace_state.get(variant.name)
+            if self._resume_enabled and cached:
+                results.append(InferenceResult.from_state(variant, cached))
+                continue
             print(f"[debug] running inference for {variant.name}")
-            results.append(backend.run(self.context, variant))
+            result = backend.run(self.context, variant)
+            namespace_state[variant.name] = result.to_state()
+            self.context.save_state()
+            results.append(result)
         return results
 
     def run_evaluation(
@@ -194,18 +307,25 @@ class Pipeline:
         variants: Iterable[DatasetVariant],
         inference_results: Iterable[InferenceResult],
     ) -> Dict[str, Any]:
+        cached = self._steps_state.get("evaluation")
+        if self._resume_enabled and cached and "metrics" in cached:
+            return copy.deepcopy(cached["metrics"])
+
         evaluator_cls = EVALUATORS.get(self.config.evaluation.type)
         evaluator: Evaluator = evaluator_cls(self.config.evaluation)
-        return evaluator.run(self.context, dataset, list(variants), list(inference_results))
+        metrics = evaluator.run(self.context, dataset, list(variants), list(inference_results))
+        self._steps_state["evaluation"] = {"metrics": copy.deepcopy(metrics)}
+        self.context.save_state()
+        return metrics
 
     def run(self) -> Dict[str, Any]:
         dataset = self.build_dataset()
         variants = self.run_attacks(dataset)
 
-        baseline_inferences = self.run_inference(variants)
+        baseline_inferences = self.run_inference(variants, "baseline")
 
         defended = self.run_defenses(variants)
-        defended_inferences = self.run_inference(defended)
+        defended_inferences = self.run_inference(defended, "defended")
 
         combined_variants = list(variants) + list(defended)
         combined_inferences = list(baseline_inferences) + list(defended_inferences)
