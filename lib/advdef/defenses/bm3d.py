@@ -160,6 +160,7 @@ def apply_bm3d_python(
         with Image.open(src) as img:
             alpha_channel = None
             working = img
+            original_format = img.format
             if img.mode in ("RGBA", "LA") and preserve_alpha:
                 alpha_channel = np.asarray(img.getchannel("A"), dtype=np.uint8)
 
@@ -272,9 +273,9 @@ def apply_bm3d_cli(
 
             with tempfile.TemporaryDirectory(prefix="bm3d_cli_") as tmpdir:
                 tmp_dir = Path(tmpdir)
-                tmp_input = tmp_dir / "input.png"
-                tmp_output = tmp_dir / "output.png"
-                working.save(tmp_input)
+                tmp_input = tmp_dir / "input.bmp"
+                tmp_output = tmp_dir / "output.bmp"
+                working.save(tmp_input, format="BMP")
 
                 sigma_arg = f"{sigma_cli:.6f}".rstrip("0").rstrip(".")
                 cmd: list[str] = [
@@ -308,6 +309,8 @@ def apply_bm3d_cli(
             save_kwargs = {}
             if format_hint:
                 save_kwargs["format"] = format_hint.upper()
+            elif original_format:
+                save_kwargs["format"] = original_format
 
             result_img.save(destination, **save_kwargs)
     except subprocess.CalledProcessError as exc:  # pragma: no cover - external binary failure
