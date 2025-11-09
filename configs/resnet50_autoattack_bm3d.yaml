@@ -35,7 +35,7 @@ inference:
     topk: 5
 defenses:
   - type: bm3d
-    name: bm3d_cli_gpu
+    name: bm3d
     params:
       backend: cli
       cli_binary: external/bm3d-gpu/build/bm3d

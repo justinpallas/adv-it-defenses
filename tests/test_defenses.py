@@ -2,12 +2,11 @@
 
 from __future__ import annotations
 
-import importlib.util
 from types import SimpleNamespace
 from pathlib import Path
+import textwrap
 
 import numpy as np
-import pytest
 from PIL import Image
 
 from advdef.config import DefenseConfig
@@ -66,6 +65,37 @@ def _execute_defense(
     if not pre_existing:
         assert output_path.exists(), f"Expected output file {output_path}."
     return output_path
+
+
+def _create_bm3d_cli_stub(tmp_path: Path) -> Path:
+    script = tmp_path / "bm3d_cli_stub.py"
+    script.write_text(
+        textwrap.dedent(
+            """\
+            #!/usr/bin/env python3
+            import sys
+            from pathlib import Path
+            from PIL import Image, ImageFilter
+
+            def main(argv):
+                if len(argv) < 5:
+                    return 1
+                input_path = Path(argv[1])
+                output_path = Path(argv[2])
+                sigma = float(argv[3])
+                img = Image.open(input_path)
+                radius = max(sigma / 50.0, 0.0)
+                img = img.filter(ImageFilter.GaussianBlur(radius))
+                img.save(output_path)
+                return 0
+
+            if __name__ == "__main__":
+                sys.exit(main(sys.argv))
+            """
+        )
+    )
+    script.chmod(0o755)
+    return script
 
 
 def test_crop_resize_crops_center(tmp_path):
@@ -226,7 +256,7 @@ def test_bit_depth_dither(tmp_path):
 
 
 def test_bm3d_reduces_noise(tmp_path):
-    backend_module, function_gray, function_rgb = _resolve_bm3d_backend()
+    cli_stub = _create_bm3d_cli_stub(tmp_path)
     height = width = 16
     grid_x, grid_y = np.meshgrid(
         np.linspace(32, 224, width, dtype=np.float32),
@@ -246,9 +276,11 @@ def test_bm3d_reduces_noise(tmp_path):
 
     params = {
         "sigma": 20.0,
-        "backend_module": backend_module,
-        "function_gray": function_gray,
-        "function_rgb": function_rgb,
+        "backend": "cli",
+        "cli_binary": str(cli_stub),
+        "cli_quiet": True,
+        "cli_twostep": False,
+        "workers": 1,
     }
 
     output_path = _execute_defense(
@@ -442,16 +474,3 @@ def test_crop_resize_warns_and_upsamples(tmp_path):
 
     result = np.array(Image.open(output_path))
     assert result.shape == (16, 16)
-
-
-def _resolve_bm3d_backend() -> tuple[str, str, str]:
-    """Pick an installed BM3D backend (CUDA preferred) or skip the test."""
-
-    candidates = [
-        ("bm3d_cuda", "bm3d_gray_cuda", "bm3d_rgb_cuda"),
-        ("bm3d", "bm3d", "bm3d_rgb"),
-    ]
-    for module_name, gray, rgb in candidates:
-        if importlib.util.find_spec(module_name):
-            return module_name, gray, rgb
-    pytest.skip("Requires either 'bm3d_cuda' or 'bm3d' to be installed.")

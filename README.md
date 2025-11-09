@@ -58,28 +58,20 @@ If you prefer, you can follow the upstream instructions instead and create the
 command above captures the minimal additional packages required when reusing the
 environment created for this toolkit.
 
-To enable the BM3D defense install at least one backend:
+To enable the BM3D defense, build the CLI backend (`external/bm3d-gpu/`):
 
-- CPU reference implementation:
+```bash
+git submodule update --init --recursive external/bm3d-gpu
+advdef setup bm3d-gpu
+```
 
-  ```bash
-  pip install -e '.[denoisers]'
-  ```
-
-- CUDA backend (`external/bm3d-gpu/` submodule using the upstream CLI project):
-
-  ```bash
-  git submodule update --init --recursive external/bm3d-gpu
-  advdef setup bm3d-gpu
-  ```
-
-  The helper configures and builds the
-  [`bm3d-gpu`](https://github.com/DawyD/bm3d-gpu) CLI binary (requires the CUDA
-  toolkit plus CMake). After building, follow the defense config in
-  `configs/resnet50_autoattack_bm3d.yaml` (set `backend: cli`, `cli_binary`,
-  `cli_color_mode`, etc.) and adjust parameters as needed for your environment.
-  CLI stdout/stderr is suppressed by default—toggle `cli_log_output: true` in
-  the config if you need to see per-image timing/noise reports.
+The helper configures and builds the
+[`bm3d-gpu`](https://github.com/DawyD/bm3d-gpu) binary (requires the CUDA
+toolkit plus CMake). After building, follow the defense config in
+`configs/resnet50_autoattack_bm3d.yaml` (set `backend: cli`, `cli_binary`,
+`cli_color_mode`, etc.) and adjust parameters as needed for your environment.
+CLI stdout/stderr is suppressed by default—toggle `cli_log_output: true` in the
+config if you need to see per-image timing/noise reports.
 
 ## 🧪 Running an Experiment
 
