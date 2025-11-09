@@ -53,15 +53,9 @@ extensions and install the required Python packages in your current environment:
 advdef setup r-smoe
 ```
 
-If you prefer, you can follow the upstream instructions instead and create the
-`r-smoe` Conda environment provided in `external/r-smoe/my_environment.yml`. The
-command above captures the minimal additional packages required when reusing the
-environment created for this toolkit.
-
 To enable the BM3D defense, build the CLI backend (`external/bm3d-gpu/`):
 
 ```bash
-git submodule update --init --recursive external/bm3d-gpu
 advdef setup bm3d-gpu
 ```
 
@@ -75,7 +69,7 @@ config if you need to see per-image timing/noise reports.
 
 ## 🧪 Running an Experiment
 
-Configure an experiment by editing a YAML file (see `configs/resnet50_autoattack.yaml`).
+Configure an experiment by editing a YAML file (see `configs/example_config.yaml`).
 By default the ImageNet dataset builder downloads the validation split into
 `datasets/imagenet/val/` and the devkit (ground-truth labels) into
 `datasets/imagenet/ILSVRC2012_devkit_t12/` the first time they are needed,
@@ -84,16 +78,16 @@ Override paths in the config only if you store the data elsewhere. Run the
 experiment with:
 
 ```bash
-advdef run configs/resnet50_autoattack.yaml
+advdef run configs/example_config.yaml
 # increase verbosity if needed
-advdef run configs/resnet50_autoattack.yaml --log-level info
+advdef run configs/example_config.yaml --log-level info
 ```
 
 Resume a partially completed run by reusing its `--run-name` and adding `--resume`. Cached artifacts
 allow the pipeline to skip completed stages:
 
 ```bash
-advdef run configs/resnet50_autoattack.yaml --run-name 20240122_resnet50_autoattack --resume
+advdef run configs/example_config.yaml --run-name 20240122_example_config --resume
 ```
 
 When you already have the validation set/devkit stored elsewhere, pass
@@ -119,3 +113,6 @@ values to continue unfinished jobs without repeating completed ones.
 This project uses Yi-Hsin Li's R-SMoE implementation for the SMoE defense component
 (https://github.com/yihsinli/r-smoe), included via git submodule and distributed
 under its original Gaussian-Splatting License (`external/r-smoe/LICENSE.md`).
+
+For the BM3D defense, we use Dawy Dawa's `bm3d-gpu` implementation (https://github.com/DawyD/bm3d-gpu),
+distributed under the 2-Clause BSD License (`external/bm3d-gpu/LICENSE`).
