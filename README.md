@@ -19,7 +19,7 @@ The Adversarial Defense Experiment Toolkit is a modular framework for testing di
 ### 🛡️ Available Defenses
 
 - SMoE (Steered Mixture-of-Experts)
-- BM3D Denoising (CPU or CUDA backend)
+- BM3D Denoising
 - JPEG Compression
 - Grayscale Conversion
 - Crop & Resize Transformation
