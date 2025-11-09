@@ -78,6 +78,8 @@ To enable the BM3D defense install at least one backend:
   toolkit plus CMake). After building, follow the defense config in
   `configs/resnet50_autoattack_bm3d.yaml` (set `backend: cli`, `cli_binary`,
   `cli_color_mode`, etc.) and adjust parameters as needed for your environment.
+  CLI stdout/stderr is suppressed by default—toggle `cli_log_output: true` in
+  the config if you need to see per-image timing/noise reports.
 
 ## 🧪 Running an Experiment
 

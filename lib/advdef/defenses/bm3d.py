@@ -158,6 +158,7 @@ def apply_bm3d_python(
 
     try:
         with Image.open(src) as img:
+            original_format = img.format
             alpha_channel = None
             working = img
             original_format = img.format
@@ -231,6 +232,7 @@ def apply_bm3d_cli(
     cli_twostep: bool,
     cli_quiet: bool,
     cli_extra_args: Sequence[str],
+    cli_log_output: bool,
 ) -> tuple[str, str]:
     relative = src.relative_to(input_root)
     destination = output_root / relative
@@ -292,13 +294,25 @@ def apply_bm3d_cli(
                 if cli_extra_args:
                     cmd.extend(cli_extra_args)
 
-                subprocess.run(cmd, check=True)
+                run_kwargs: dict[str, Any] = {}
+                if not cli_log_output:
+                    run_kwargs.update({"stdout": subprocess.PIPE, "stderr": subprocess.PIPE, "text": True})
 
-                if not tmp_output.exists():
-                    raise RuntimeError("bm3d-gpu did not produce an output image.")
+                result = subprocess.run(cmd, check=True, **run_kwargs)
 
-                result_img = Image.open(tmp_output)
-                result_img.load()
+                if tmp_output.exists():
+                    result_img = Image.open(tmp_output)
+                    result_img.load()
+                else:
+                    captured = ""
+                    if not cli_log_output and result is not None:
+                        captured = (result.stdout or "") + (result.stderr or "")
+                    raise RuntimeError(
+                        "bm3d-gpu did not produce an output image."
+                        + (f" Output:\n{captured}" if captured else "")
+                    )
+
+            # preserve original format information outside context
 
             if alpha_channel is not None and preserve_alpha:
                 if result_img.mode != "RGB":
@@ -381,6 +395,7 @@ class BM3DDefense(Defense):
             cli_twostep = bool(params.get("cli_twostep", True))
             cli_quiet = bool(params.get("cli_quiet", True))
             cli_extra_args = tuple(str(arg) for arg in params.get("cli_extra_args", ()))
+            cli_log_output = bool(params.get("cli_log_output", False))
 
             if backend_kind == "python":
                 backend_module = str(
@@ -441,6 +456,7 @@ class BM3DDefense(Defense):
                 "cli_twostep": cli_twostep,
                 "cli_quiet": cli_quiet,
                 "cli_extra_args": cli_extra_args,
+                "cli_log_output": cli_log_output,
             }
         return self._params_cache
 
@@ -482,7 +498,8 @@ class BM3DDefense(Defense):
                 backend_summary = (
                     f"backend=cli binary={params['cli_binary']} "
                     f"color_mode={params['cli_color_mode']} twostep={params['cli_twostep']} "
-                    f"quiet={params['cli_quiet']} extra_args={extra_args or '<none>'}"
+                    f"quiet={params['cli_quiet']} log_output={params['cli_log_output']} "
+                    f"extra_args={extra_args or '<none>'}"
                 )
 
             print(
@@ -563,6 +580,7 @@ class BM3DDefense(Defense):
                 cli_twostep=params["cli_twostep"],
                 cli_quiet=params["cli_quiet"],
                 cli_extra_args=params["cli_extra_args"],
+                cli_log_output=params["cli_log_output"],
             )
 
         written = skipped = failed = 0
@@ -608,6 +626,7 @@ class BM3DDefense(Defense):
             metadata["cli_twostep"] = params["cli_twostep"]
             metadata["cli_quiet"] = params["cli_quiet"]
             metadata["cli_extra_args"] = list(params["cli_extra_args"])
+            metadata["cli_log_output"] = params["cli_log_output"]
         if format_hint:
             metadata["format"] = format_hint
 
