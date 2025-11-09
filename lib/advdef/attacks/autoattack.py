@@ -22,7 +22,7 @@ from advdef.datasets.imagenet_autoattack import (
     save_images,
     write_manifest,
 )
-from advdef.utils import Progress, ensure_dir, normalized_l2, summarize_tensor
+from advdef.utils import Progress, build_identifier, ensure_dir, normalized_l2, summarize_tensor
 
 try:
     from pyautoattack import AutoAttack
@@ -153,6 +153,14 @@ class AutoAttackAttack(Attack):
 
     def __init__(self, config: AttackConfig) -> None:
         super().__init__(config)
+        prefix = config.type or "autoattack"
+        self._config_identifier = build_identifier(
+            name=config.name,
+            params=config.params,
+            default_prefix=prefix,
+            extra={"targeted": config.targeted},
+        )
+        self._config_label = config.name or self._config_identifier
 
     def run(self, context: RunContext, dataset: DatasetArtifacts) -> Iterable[DatasetVariant]:
         params = self.config.params
@@ -195,7 +203,9 @@ class AutoAttackAttack(Attack):
 
         transform = build_transform()
 
-        attack_root = ensure_dir(context.artifacts_dir / "attacks")
+        config_identifier = self._config_identifier
+        config_label = self._config_label
+        attack_root = ensure_dir(context.artifacts_dir / "attacks" / config_identifier)
         image_hw = dataset.metadata.get("image_hw")
         variants: list[DatasetVariant] = []
 
@@ -205,11 +215,12 @@ class AutoAttackAttack(Attack):
             attack_key = str(spec["key"])
             seed_offset = int(spec["seed_offset"])
 
+            variant_name = f"{config_identifier}-{attack_name}"
             output_dir = ensure_dir(attack_root / str(spec["subdir"]))
             outputs = [output_dir / f"{info.path.stem}.png" for info in samples]
             manifest_path = output_dir / "manifest.csv"
 
-            print(f"[info] Starting {display} attack on {len(samples)} samples.")
+            print(f"[info] Starting {display} attack [{variant_name}] on {len(samples)} samples.")
 
             tensors = [load_image(info.path, transform) for info in samples]
             labels = [info.target_label if info.target_label is not None else info.predicted_label for info in samples]
@@ -293,12 +304,16 @@ class AutoAttackAttack(Attack):
 
             variants.append(
                 DatasetVariant(
-                    name=attack_name,
+                    name=variant_name,
                     data_dir=str(output_dir),
                     parent="baseline",
                     metadata={
                         "attack": attack_name,
                         "display": display,
+                        "config_name": self.config.name,
+                        "config_label": config_label,
+                        "config_identifier": config_identifier,
+                        "variant_name": variant_name,
                         "eps": eps,
                         "norm": norm,
                         "seed": seed_base + seed_offset,
