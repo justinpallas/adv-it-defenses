@@ -1,0 +1,55 @@
+name: resnet50_autoattack_bm3d
+description: >
+  Run AutoAttack on a small ImageNet subset, denoise adversarial images with a CUDA BM3D backend,
+  and evaluate a pretrained ResNet-50 classifier.
+seed: 123
+work_dir: runs
+dataset:
+  type: imagenet-autoattack
+  name: imagenet_subset
+  params:
+    count: 50
+    min_confidence: 0.0
+    require_correct: false
+    batch_size: 16
+    seed: 123
+  attacks:
+    - type: autoattack
+      name: autoattack_linf
+      params:
+        attacks: ["apgd-ce", "apgd-t", "square"]
+        eps: 0.0313725
+        norm: Linf
+        batch_size: 8
+        device: auto
+model:
+  type: timm
+  params:
+    architecture: resnet50
+    pretrained: true
+inference:
+  type: timm
+  params:
+    batch_size: 64
+    device: auto
+    topk: 5
+defenses:
+  - type: bm3d
+    name: bm3d_cuda_default
+    params:
+      backend: cuda
+      backend_module: bm3d_cuda
+      function_gray: bm3d_gray_cuda
+      function_rgb: bm3d_rgb_cuda
+      sigma: 30.0
+      sigma_scale: pixel
+      convert_mode: rgb
+      preserve_alpha: true
+      workers: 1
+      bm3d_kwargs:
+        device: cuda
+        fast_mode: true
+evaluation:
+  type: imagenet
+  params:
+    topk: [1, 5]

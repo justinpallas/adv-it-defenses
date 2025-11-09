@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
+import importlib.util
 from types import SimpleNamespace
 from pathlib import Path
-from typing import Any
 
 import numpy as np
 import pytest
@@ -13,6 +13,7 @@ from PIL import Image
 from advdef.config import DefenseConfig
 from advdef.core.pipeline import DatasetVariant
 from advdef.defenses.bit_depth import BitDepthDefense
+from advdef.defenses.bm3d import BM3DDefense
 from advdef.defenses.crop_resize import CropResizeDefense
 from advdef.defenses.flip import FlipDefense
 from advdef.defenses.grayscale import GrayscaleDefense
@@ -224,6 +225,49 @@ def test_bit_depth_dither(tmp_path):
     assert result.shape == arr.shape
 
 
+def test_bm3d_reduces_noise(tmp_path):
+    backend_module, function_gray, function_rgb = _resolve_bm3d_backend()
+    height = width = 16
+    grid_x, grid_y = np.meshgrid(
+        np.linspace(32, 224, width, dtype=np.float32),
+        np.linspace(32, 224, height, dtype=np.float32),
+    )
+    clean = np.stack(
+        [
+            grid_x,
+            grid_y,
+            (grid_x + grid_y) / 2,
+        ],
+        axis=-1,
+    )
+
+    rng = np.random.default_rng(8)
+    noisy = np.clip(clean + rng.normal(0, 20, size=clean.shape), 0, 255).astype(np.uint8)
+
+    params = {
+        "sigma": 20.0,
+        "backend_module": backend_module,
+        "function_gray": function_gray,
+        "function_rgb": function_rgb,
+    }
+
+    output_path = _execute_defense(
+        tmp_path,
+        BM3DDefense,
+        "bm3d",
+        params,
+        noisy,
+    )
+
+    result = np.array(Image.open(output_path)).astype(np.float32)
+    noisy_float = noisy.astype(np.float32)
+
+    clean_error = np.mean((noisy_float - clean) ** 2)
+    denoised_error = np.mean((result - clean) ** 2)
+
+    assert denoised_error < clean_error
+
+
 def test_low_pass_preserves_colour_channels(tmp_path):
     # Half red, half green image to test channel separation.
     arr = np.zeros((5, 5, 3), dtype=np.uint8)
@@ -398,3 +442,16 @@ def test_crop_resize_warns_and_upsamples(tmp_path):
 
     result = np.array(Image.open(output_path))
     assert result.shape == (16, 16)
+
+
+def _resolve_bm3d_backend() -> tuple[str, str, str]:
+    """Pick an installed BM3D backend (CUDA preferred) or skip the test."""
+
+    candidates = [
+        ("bm3d_cuda", "bm3d_gray_cuda", "bm3d_rgb_cuda"),
+        ("bm3d", "bm3d", "bm3d_rgb"),
+    ]
+    for module_name, gray, rgb in candidates:
+        if importlib.util.find_spec(module_name):
+            return module_name, gray, rgb
+    pytest.skip("Requires either 'bm3d_cuda' or 'bm3d' to be installed.")

@@ -40,7 +40,7 @@ defenses:
       root: external/r-smoe
       mode: standard
       iterations: 500
-      kernels: 2000
+      npcs: 2000
       file_name_prefix: rsmoe
   - type: jpeg
     name: jpeg_compression_quality_75

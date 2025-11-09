@@ -16,5 +16,6 @@ from .inference import timm_backend  # noqa: F401
 from .evaluation import imagenet  # noqa: F401
 
 # Defenses (wrappers point to external implementations)
+from .defenses import bm3d  # noqa: F401
 from .defenses import jpeg  # noqa: F401
 from .defenses import r_smoe  # noqa: F401

@@ -19,6 +19,7 @@ The Adversarial Defense Experiment Toolkit is a modular framework for testing di
 ### 🛡️ Available Defenses
 
 - SMoE (Steered Mixture-of-Experts)
+- BM3D Denoising (CPU or CUDA backend)
 - JPEG Compression
 - Grayscale Conversion
 - Crop & Resize Transformation
@@ -56,6 +57,18 @@ If you prefer, you can follow the upstream instructions instead and create the
 `r-smoe` Conda environment provided in `external/r-smoe/my_environment.yml`. The
 command above captures the minimal additional packages required when reusing the
 environment created for this toolkit.
+
+To enable the BM3D defense install at least one backend. For the reference CPU
+implementation run:
+
+```bash
+pip install -e '.[denoisers]'
+```
+
+For GPU acceleration install a CUDA-capable backend such as
+[`bm3d-cuda`](https://github.com/PINGFANZheng/bm3d-cuda) and set the
+`backend_module`, `function_gray`, and `function_rgb` parameters (see
+`configs/resnet50_autoattack_bm3d.yaml` for a ready-to-run example).
 
 ## 🧪 Running an Experiment
 

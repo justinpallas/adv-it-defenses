@@ -28,6 +28,7 @@ dependencies = [
 [project.optional-dependencies]
 dev = ["pytest", "black", "ruff", "scikit-image>=0.22", "torchattacks>=3.5"]
 attacks = ["torchattacks>=3.5"]
+denoisers = ["bm3d>=4.0"]
 
 [project.scripts]
 advdef = "advdef.cli:app"
