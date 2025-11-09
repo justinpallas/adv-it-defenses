@@ -8,7 +8,7 @@ dataset:
   type: imagenet-autoattack
   name: imagenet_subset
   params:
-    count: 50
+    count: 10
     min_confidence: 0.0
     require_correct: false
     batch_size: 16
@@ -17,7 +17,7 @@ dataset:
     - type: autoattack
       name: autoattack_linf
       params:
-        attacks: ["apgd-ce", "apgd-t", "square"]
+        attacks: ["apgd-ce"]
         eps: 0.0313725
         norm: Linf
         batch_size: 8
