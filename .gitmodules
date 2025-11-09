@@ -1,3 +1,6 @@
 [submodule "r-smoe"]
 	path = external/r-smoe
 	url = https://github.com/yihsinli/r-smoe.git
+[submodule "bm3d-gpu"]
+	path = external/bm3d-gpu
+	url = https://github.com/DawyD/bm3d-gpu.git

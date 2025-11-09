@@ -7,6 +7,8 @@ import functools
 import importlib
 import inspect
 import os
+import subprocess
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Mapping, Sequence
@@ -124,7 +126,7 @@ def _normalize_result(array: Any, clip_output: bool) -> np.ndarray:
     return result
 
 
-def apply_bm3d(
+def apply_bm3d_python(
     src: Path,
     *,
     input_root: Path,
@@ -212,6 +214,110 @@ def apply_bm3d(
     return "written", destination.as_posix()
 
 
+def apply_bm3d_cli(
+    src: Path,
+    *,
+    input_root: Path,
+    output_root: Path,
+    binary_path: Path,
+    sigma_cli: float,
+    convert_mode: str,
+    preserve_alpha: bool,
+    format_hint: str | None,
+    overwrite: bool,
+    dry_run: bool,
+    cli_color_mode: str,
+    cli_twostep: bool,
+    cli_quiet: bool,
+    cli_extra_args: Sequence[str],
+) -> tuple[str, str]:
+    relative = src.relative_to(input_root)
+    destination = output_root / relative
+
+    if format_hint:
+        destination = destination.with_suffix(f".{format_hint.lower()}")
+
+    if not overwrite and destination.exists():
+        return "skipped", destination.as_posix()
+
+    if dry_run:
+        return "dry-run", destination.as_posix()
+
+    destination.parent.mkdir(parents=True, exist_ok=True)
+
+    try:
+        with Image.open(src) as img:
+            alpha_channel = None
+            working = img
+            if img.mode in ("RGBA", "LA") and preserve_alpha:
+                alpha_channel = np.asarray(img.getchannel("A"), dtype=np.uint8)
+
+            if convert_mode == "rgb":
+                working = img.convert("RGB")
+            elif convert_mode == "luma":
+                working = img.convert("L")
+            else:
+                if img.mode == "RGBA":
+                    working = img.convert("RGB")
+                elif img.mode == "LA":
+                    working = img.convert("L")
+                elif img.mode not in ("RGB", "L"):
+                    working = img.convert("RGB")
+
+            color_flag: bool
+            if cli_color_mode == "auto":
+                color_flag = working.mode != "L"
+            else:
+                color_flag = cli_color_mode == "color"
+
+            with tempfile.TemporaryDirectory(prefix="bm3d_cli_") as tmpdir:
+                tmp_dir = Path(tmpdir)
+                tmp_input = tmp_dir / "input.png"
+                tmp_output = tmp_dir / "output.png"
+                working.save(tmp_input)
+
+                sigma_arg = f"{sigma_cli:.6f}".rstrip("0").rstrip(".")
+                cmd: list[str] = [
+                    str(binary_path),
+                    tmp_input.as_posix(),
+                    tmp_output.as_posix(),
+                    sigma_arg or "0",
+                    "color" if color_flag else "nocolor",
+                ]
+                if cli_twostep:
+                    cmd.append("twostep")
+                if cli_quiet:
+                    cmd.append("quiet")
+                if cli_extra_args:
+                    cmd.extend(cli_extra_args)
+
+                subprocess.run(cmd, check=True)
+
+                if not tmp_output.exists():
+                    raise RuntimeError("bm3d-gpu did not produce an output image.")
+
+                result_img = Image.open(tmp_output)
+                result_img.load()
+
+            if alpha_channel is not None and preserve_alpha:
+                if result_img.mode != "RGB":
+                    result_img = result_img.convert("RGB")
+                alpha_img = Image.fromarray(alpha_channel, mode="L")
+                result_img.putalpha(alpha_img)
+
+            save_kwargs = {}
+            if format_hint:
+                save_kwargs["format"] = format_hint.upper()
+
+            result_img.save(destination, **save_kwargs)
+    except subprocess.CalledProcessError as exc:  # pragma: no cover - external binary failure
+        return f"failed: bm3d-gpu exited with code {exc.returncode}", destination.as_posix()
+    except Exception as exc:  # pragma: no cover - file system / binary dependent
+        return f"failed: {exc}", destination.as_posix()
+
+    return "written", destination.as_posix()
+
+
 @register_defense("bm3d")
 class BM3DDefense(Defense):
     """Apply BM3D denoising to mitigate adversarial perturbations."""
@@ -236,6 +342,7 @@ class BM3DDefense(Defense):
             if sigma_scale not in {"pixel", "relative"}:
                 raise ValueError("sigma_scale must be 'pixel' or 'relative'.")
             sigma_psd = sigma / 255.0 if sigma_scale == "pixel" else sigma
+            sigma_cli = sigma if sigma_scale == "pixel" else sigma * 255.0
             profile = params.get("profile", "np")
             profile = str(profile) if profile is not None else None
             profile_parameter = str(params.get("profile_parameter", "profile"))
@@ -243,26 +350,9 @@ class BM3DDefense(Defense):
             stage = str(stage) if stage is not None else None
             stage_parameter = str(params.get("stage_parameter", "stage_arg"))
             backend_label = str(params.get("backend", "cpu")).lower()
-            backend_module = str(
-                params.get("backend_module")
-                or ("bm3d_cuda" if backend_label == "cuda" else "bm3d")
-            )
-            default_gray = "bm3d" if backend_label == "cpu" else "bm3d_gray_cuda"
-            default_rgb = "bm3d_rgb" if backend_label == "cpu" else "bm3d_rgb_cuda"
-            function_gray = str(params.get("function_gray") or default_gray)
-            function_rgb = str(params.get("function_rgb") or default_rgb)
-            bm3d_kwargs = dict(params.get("bm3d_kwargs", {}))
-            bm3d_kwargs = {str(key): value for key, value in bm3d_kwargs.items()}
-            if profile and profile_parameter and profile_parameter not in bm3d_kwargs:
-                bm3d_kwargs[profile_parameter] = profile
-            if stage and stage_parameter and stage_parameter not in bm3d_kwargs:
-                bm3d_kwargs[stage_parameter] = stage
-
-            device = params.get("device")
-            if backend_label == "cuda" and device is None:
-                device = "cuda"
-            if device is not None and "device" not in bm3d_kwargs:
-                bm3d_kwargs["device"] = device
+            if backend_label not in {"cpu", "cuda", "cli"}:
+                raise ValueError("backend must be one of 'cpu', 'cuda', or 'cli'.")
+            backend_kind = "cli" if backend_label == "cli" else "python"
 
             convert_mode = str(params.get("convert_mode", "auto")).lower()
             if convert_mode not in {"auto", "rgb", "luma"}:
@@ -277,16 +367,61 @@ class BM3DDefense(Defense):
             if workers <= 0:
                 raise ValueError("workers must be positive.")
 
+            bm3d_kwargs: dict[str, Any] = {}
+            backend_module: str | None = None
+            function_gray: str | None = None
+            function_rgb: str | None = None
+            cli_binary: Path | None = None
+            cli_color_mode = str(params.get("cli_color_mode", "auto")).lower()
+            if cli_color_mode not in {"auto", "color", "grayscale"}:
+                raise ValueError("cli_color_mode must be 'auto', 'color', or 'grayscale'.")
+            cli_twostep = bool(params.get("cli_twostep", True))
+            cli_quiet = bool(params.get("cli_quiet", True))
+            cli_extra_args = tuple(str(arg) for arg in params.get("cli_extra_args", ()))
+
+            if backend_kind == "python":
+                backend_module = str(
+                    params.get("backend_module")
+                    or ("bm3d_cuda" if backend_label == "cuda" else "bm3d")
+                )
+                default_gray = "bm3d" if backend_label == "cpu" else "bm3d_gray_cuda"
+                default_rgb = "bm3d_rgb" if backend_label == "cpu" else "bm3d_rgb_cuda"
+                function_gray = str(params.get("function_gray") or default_gray)
+                function_rgb = str(params.get("function_rgb") or default_rgb)
+                bm3d_kwargs = dict(params.get("bm3d_kwargs", {}))
+                bm3d_kwargs = {str(key): value for key, value in bm3d_kwargs.items()}
+                if profile and profile_parameter and profile_parameter not in bm3d_kwargs:
+                    bm3d_kwargs[profile_parameter] = profile
+                if stage and stage_parameter and stage_parameter not in bm3d_kwargs:
+                    bm3d_kwargs[stage_parameter] = stage
+
+                device = params.get("device")
+                if backend_label == "cuda" and device is None:
+                    device = "cuda"
+                if device is not None and "device" not in bm3d_kwargs:
+                    bm3d_kwargs["device"] = device
+            else:
+                default_binary = Path("external/bm3d-gpu/build/bm3d")
+                cli_binary_param = params.get("cli_binary") or params.get("binary_path") or default_binary
+                cli_binary = Path(cli_binary_param)
+                if not cli_binary.exists():
+                    raise FileNotFoundError(
+                        f"bm3d-gpu binary not found at {cli_binary}. Build it via `advdef setup bm3d-gpu` "
+                        "or point `cli_binary` to an existing executable."
+                    )
+
             self._params_cache = {
                 "patterns": patterns,
                 "sigma": sigma,
                 "sigma_scale": sigma_scale,
                 "sigma_psd": sigma_psd,
+                "sigma_cli": sigma_cli,
                 "profile": profile,
                 "profile_parameter": profile_parameter,
                 "stage": stage,
                 "stage_parameter": stage_parameter,
                 "backend_label": backend_label,
+                "backend_kind": backend_kind,
                 "backend_module": backend_module,
                 "function_gray": function_gray,
                 "function_rgb": function_rgb,
@@ -298,10 +433,17 @@ class BM3DDefense(Defense):
                 "overwrite": overwrite,
                 "dry_run": dry_run,
                 "workers": workers,
+                "cli_binary": cli_binary,
+                "cli_color_mode": cli_color_mode,
+                "cli_twostep": cli_twostep,
+                "cli_quiet": cli_quiet,
+                "cli_extra_args": cli_extra_args,
             }
         return self._params_cache
 
     def _get_backend(self, params: Mapping[str, Any]) -> _BM3DBackend:
+        if params["backend_kind"] != "python":
+            raise RuntimeError("CLI backend does not provide callable functions.")
         if self._backend is None:
             self._backend = _import_backend(
                 module_name=params["backend_module"],
@@ -324,17 +466,30 @@ class BM3DDefense(Defense):
             total_images += len(images)
 
         if not self._settings_reported:
-            bm3d_kwargs = params["bm3d_kwargs"]  # type: ignore[index]
-            described_kwargs = ", ".join(sorted(bm3d_kwargs)) or "<none>"
+            if params["backend_kind"] == "python":
+                bm3d_kwargs = params["bm3d_kwargs"]  # type: ignore[index]
+                described_kwargs = ", ".join(sorted(bm3d_kwargs)) or "<none>"
+                backend_summary = (
+                    f"backend={params['backend_label']}::{params['backend_module']} "
+                    f"functions=({params['function_gray']}, {params['function_rgb']}), "
+                    f"bm3d_kwargs={described_kwargs}"
+                )
+            else:
+                extra_args = list(params["cli_extra_args"])  # type: ignore[index]
+                backend_summary = (
+                    f"backend=cli binary={params['cli_binary']} "
+                    f"color_mode={params['cli_color_mode']} twostep={params['cli_twostep']} "
+                    f"quiet={params['cli_quiet']} extra_args={extra_args or '<none>'}"
+                )
+
             print(
                 "[info] BM3D defense settings: "
                 f"config={self.config.name or self._config_identifier} "
                 f"sigma={params['sigma']} ({params['sigma_scale']}), "
-                f"backend={params['backend_label']}::{params['backend_module']} "
-                f"functions=({params['function_gray']}, {params['function_rgb']}), "
+                f"{backend_summary} "
                 f"convert_mode={params['convert_mode']}, preserve_alpha={params['preserve_alpha']}, "
                 f"clip_output={params['clip_output']}, format={params['format_hint']}, "
-                f"workers={params['workers']}, bm3d_kwargs={described_kwargs}"
+                f"workers={params['workers']}"
             )
             self._settings_reported = True
 
@@ -344,8 +499,10 @@ class BM3DDefense(Defense):
 
     def run(self, context: RunContext, variant: DatasetVariant) -> DatasetVariant:
         params = self._get_params()
-        backend = self._get_backend(params)
+        backend_kind = params["backend_kind"]  # type: ignore[index]
+        backend = self._get_backend(params) if backend_kind == "python" else None
         sigma_psd = params["sigma_psd"]  # type: ignore[index]
+        sigma_cli = params["sigma_cli"]  # type: ignore[index]
         bm3d_kwargs = params["bm3d_kwargs"]  # type: ignore[index]
         convert_mode = params["convert_mode"]  # type: ignore[index]
         preserve_alpha = params["preserve_alpha"]  # type: ignore[index]
@@ -372,20 +529,38 @@ class BM3DDefense(Defense):
             progress = Progress(total=len(images), description="BM3D denoising", unit="images")
             self._progress = progress
 
-        task = functools.partial(
-            apply_bm3d,
-            input_root=input_dir,
-            output_root=output_root,
-            backend=backend,
-            sigma_psd=sigma_psd,
-            bm3d_kwargs=bm3d_kwargs,
-            convert_mode=convert_mode,
-            preserve_alpha=preserve_alpha,
-            format_hint=format_hint,
-            overwrite=overwrite,
-            dry_run=dry_run,
-            clip_output=clip_output,
-        )
+        if backend_kind == "python":
+            task = functools.partial(
+                apply_bm3d_python,
+                input_root=input_dir,
+                output_root=output_root,
+                backend=backend,
+                sigma_psd=sigma_psd,
+                bm3d_kwargs=bm3d_kwargs,
+                convert_mode=convert_mode,
+                preserve_alpha=preserve_alpha,
+                format_hint=format_hint,
+                overwrite=overwrite,
+                dry_run=dry_run,
+                clip_output=clip_output,
+            )
+        else:
+            task = functools.partial(
+                apply_bm3d_cli,
+                input_root=input_dir,
+                output_root=output_root,
+                binary_path=params["cli_binary"],
+                sigma_cli=sigma_cli,
+                convert_mode=convert_mode,
+                preserve_alpha=preserve_alpha,
+                format_hint=format_hint,
+                overwrite=overwrite,
+                dry_run=dry_run,
+                cli_color_mode=params["cli_color_mode"],
+                cli_twostep=params["cli_twostep"],
+                cli_quiet=params["cli_quiet"],
+                cli_extra_args=params["cli_extra_args"],
+            )
 
         written = skipped = failed = 0
         with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as executor:
@@ -408,9 +583,7 @@ class BM3DDefense(Defense):
             "profile": params["profile"],
             "stage": params["stage"],
             "backend": params["backend_label"],
-            "backend_module": params["backend_module"],
-            "function_gray": params["function_gray"],
-            "function_rgb": params["function_rgb"],
+            "backend_kind": backend_kind,
             "convert_mode": convert_mode,
             "preserve_alpha": preserve_alpha,
             "clip_output": clip_output,
@@ -421,6 +594,17 @@ class BM3DDefense(Defense):
             "config_name": self.config.name,
             "config_identifier": self._config_identifier,
         }
+        if backend_kind == "python":
+            metadata["backend_module"] = params["backend_module"]
+            metadata["function_gray"] = params["function_gray"]
+            metadata["function_rgb"] = params["function_rgb"]
+            metadata["bm3d_kwargs"] = dict(params["bm3d_kwargs"] or {})
+        else:
+            metadata["cli_binary"] = str(params["cli_binary"])
+            metadata["cli_color_mode"] = params["cli_color_mode"]
+            metadata["cli_twostep"] = params["cli_twostep"]
+            metadata["cli_quiet"] = params["cli_quiet"]
+            metadata["cli_extra_args"] = list(params["cli_extra_args"])
         if format_hint:
             metadata["format"] = format_hint
 

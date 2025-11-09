@@ -307,5 +307,68 @@ def setup_rsmoe(root: Path) -> None:
     click.echo("[setup] R-SMOE dependencies installed successfully.")
 
 
+@setup.command("bm3d-gpu")
+@click.option(
+    "--root",
+    type=click.Path(path_type=Path, file_okay=False, dir_okay=True, resolve_path=True),
+    default=Path("external/bm3d-gpu"),
+    help="Path to the bm3d-gpu submodule root.",
+)
+@click.option(
+    "--build-dir",
+    type=click.Path(path_type=Path, file_okay=False, dir_okay=True, resolve_path=True),
+    default=None,
+    help="Optional custom build directory (defaults to <root>/build).",
+)
+@click.option(
+    "--cmake-generator",
+    type=str,
+    default=None,
+    help="Optional CMake generator (e.g. Ninja). Default uses system generator.",
+)
+def setup_bm3d_gpu(root: Path, build_dir: Path | None, cmake_generator: str | None) -> None:
+    """Configure and build the bm3d-gpu CLI backend."""
+
+    click.echo(f"[setup] Using bm3d-gpu root: {root}")
+    if not root.exists():
+        raise click.ClickException(
+            f"bm3d-gpu directory not found at {root}. Ensure the submodule is checked out "
+            "(`git submodule update --init --recursive external/bm3d-gpu`)."
+        )
+
+    click.echo("[setup] Updating submodule (if necessary)...")
+    subprocess.run(
+        ["git", "submodule", "update", "--init", "--recursive", str(root)],
+        check=True,
+    )
+
+    build_root = build_dir or (root / "build")
+    build_root.mkdir(parents=True, exist_ok=True)
+
+    cmake_cmd = ["cmake", ".."]
+    if cmake_generator:
+        cmake_cmd.extend(["-G", cmake_generator])
+    click.echo(f"[setup] Running: {' '.join(cmake_cmd)} (cwd={build_root})")
+    subprocess.run(cmake_cmd, cwd=build_root, check=True)
+
+    build_cmd = ["cmake", "--build", ".", "--config", "Release"]
+    click.echo(f"[setup] Running: {' '.join(build_cmd)} (cwd={build_root})")
+    subprocess.run(build_cmd, cwd=build_root, check=True)
+
+    binary = build_root / "bm3d"
+    if not binary.exists():
+        click.echo(
+            "[setup] Build completed, but the bm3d binary was not found in the build directory. "
+            "Verify the build output manually."
+        )
+    else:
+        click.echo(f"[setup] bm3d binary available at {binary}")
+
+    click.echo(
+        "[setup] bm3d-gpu build finished. Point the BM3D defense at the compiled binary using the "
+        "`binary_path` parameter when using the CLI backend."
+    )
+
+
 if __name__ == "__main__":
     app(prog_name="advdef")

@@ -35,20 +35,18 @@ inference:
     topk: 5
 defenses:
   - type: bm3d
-    name: bm3d_cuda_default
+    name: bm3d_cli_gpu
     params:
-      backend: cuda
-      backend_module: bm3d_cuda
-      function_gray: bm3d_gray_cuda
-      function_rgb: bm3d_rgb_cuda
+      backend: cli
+      cli_binary: external/bm3d-gpu/build/bm3d
+      cli_color_mode: auto
+      cli_twostep: true
+      cli_quiet: true
       sigma: 30.0
       sigma_scale: pixel
       convert_mode: rgb
       preserve_alpha: true
-      workers: 1
-      bm3d_kwargs:
-        device: cuda
-        fast_mode: true
+      workers: 2
 evaluation:
   type: imagenet
   params:

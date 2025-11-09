@@ -58,17 +58,26 @@ If you prefer, you can follow the upstream instructions instead and create the
 command above captures the minimal additional packages required when reusing the
 environment created for this toolkit.
 
-To enable the BM3D defense install at least one backend. For the reference CPU
-implementation run:
+To enable the BM3D defense install at least one backend:
 
-```bash
-pip install -e '.[denoisers]'
-```
+- CPU reference implementation:
 
-For GPU acceleration install a CUDA-capable backend such as
-[`bm3d-cuda`](https://github.com/PINGFANZheng/bm3d-cuda) and set the
-`backend_module`, `function_gray`, and `function_rgb` parameters (see
-`configs/resnet50_autoattack_bm3d.yaml` for a ready-to-run example).
+  ```bash
+  pip install -e '.[denoisers]'
+  ```
+
+- CUDA backend (`external/bm3d-gpu/` submodule using the upstream CLI project):
+
+  ```bash
+  git submodule update --init --recursive external/bm3d-gpu
+  advdef setup bm3d-gpu
+  ```
+
+  The helper configures and builds the
+  [`bm3d-gpu`](https://github.com/DawyD/bm3d-gpu) CLI binary (requires the CUDA
+  toolkit plus CMake). After building, follow the defense config in
+  `configs/resnet50_autoattack_bm3d.yaml` (set `backend: cli`, `cli_binary`,
+  `cli_color_mode`, etc.) and adjust parameters as needed for your environment.
 
 ## 🧪 Running an Experiment
 
