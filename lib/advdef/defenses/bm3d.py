@@ -249,7 +249,9 @@ def apply_bm3d_cli(
     destination.parent.mkdir(parents=True, exist_ok=True)
 
     try:
+        original_format: str | None = None
         with Image.open(src) as img:
+            original_format = img.format
             alpha_channel = None
             working = img
             if img.mode in ("RGBA", "LA") and preserve_alpha:
