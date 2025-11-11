@@ -20,14 +20,15 @@ dependencies = [
   "torchvision>=0.15",
   "timm>=0.9",
   "pyautoattack",
+  "torchattacks>=3.5",
   "Pillow",
   "scipy>=1.9",
+  "scikit-image>=0.22",
   "plyfile>=0.7",
 ]
 
 [project.optional-dependencies]
-dev = ["pytest", "black", "ruff", "scikit-image>=0.22", "torchattacks>=3.5"]
-attacks = ["torchattacks>=3.5"]
+dev = ["pytest", "black", "ruff"]
 
 [project.scripts]
 advdef = "advdef.cli:app"
