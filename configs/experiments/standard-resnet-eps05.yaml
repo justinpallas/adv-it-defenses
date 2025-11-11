@@ -1,0 +1,103 @@
+name: standard_resnet_eps05
+description: >
+  Evaluate all defense methods against APGD-CE, Square and APGD-L2 attacks (eps=0.05) on a standard ResNet-50 model.
+seed: 123
+work_dir: runs
+dataset:
+  type: imagenet-autoattack
+  name: imagenet_subset
+  params:
+    count: 500
+    min_confidence: 0.0
+    require_correct: false
+    batch_size: 8
+    seed: 123
+  attacks:
+    - type: autoattack
+      name: autoattack_linf
+      params:
+        attacks: ["apgd-ce", "square"]
+        eps: 0.05
+        norm: Linf
+        batch_size: 8
+        device: cuda
+    - type: autoattack
+      name: autoattack_l2
+      params:
+        attacks: ["apgd-ce"]
+        eps: 19.4 # 0.05 * sqrt(224*224*3)
+        norm: L2
+        batch_size: 8
+        device: cuda
+model:
+  type: timm
+  params:
+    architecture: resnet50
+    pretrained: true
+inference:
+  type: timm
+  params:
+    batch_size: 64
+    device: auto
+    topk: 5
+defenses:
+  - type: jpeg
+    name: jpeg
+    params:
+      quality: 75
+  - type: grayscale
+    name: grayscale
+    params:
+      replicate_rgb: true
+  - type: crop-resize
+    name: 90x90-random-30crops
+    params:
+      crop_size: [90, 90]
+      resize_size: [224, 224]
+      crop_mode: random
+      num_crops: 30
+      seed: 123
+      interpolation: bilinear
+  - type: bit-depth
+    name: 3bit
+    params:
+      bits: 3
+      dither: true
+  - type: tvm
+    name: 0.03-eps1.0e-4-it200-proj5-kp0.5
+    params:
+      weight: 0.03 # λTV
+      eps: 1.0e-4
+      n_iter_max: 200
+      keep_probability: 0.5
+      projection_steps: 5
+  - type: low-pass
+    name: gaussian_sigma1.2
+    params:
+      filter: gaussian
+      sigma: 1.2
+  - type: flip
+    name: horizontal
+  - type: bm3d
+    name: sigma30.0
+    params:
+      backend: cli
+      cli_binary: external/bm3d-gpu/build/bm3d
+      cli_color_mode: auto
+      cli_twostep: true
+      cli_quiet: true
+      sigma: 30.0
+      sigma_scale: pixel
+      convert_mode: rgb
+      preserve_alpha: true
+      workers: 2
+      file_name_prefix: bm3d
+  - type: r-smoe
+    name: 2000-k_500-it_16-models
+    params:
+      root: external/r-smoe
+      mode: denoise
+      n_multi_model: 16
+      iterations: 500
+      npcs: 2000
+      file_name_prefix: rsmoe

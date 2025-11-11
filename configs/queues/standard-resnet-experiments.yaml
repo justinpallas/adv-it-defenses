@@ -1,0 +1,18 @@
+queue:
+  name: standard_resnet_experiments
+  concurrency: 1
+jobs:
+  - path: ../experiments/standard-resnet-eps01.yaml
+    run_name: standard-resnet-eps01
+  - path: ../experiments/standard-resnet-eps02.yaml
+    run_name: standard-resnet-eps02
+  - path: ../experiments/standard-resnet-eps03.yaml
+    run_name: standard-resnet-eps03
+  - path: ../experiments/standard-resnet-eps04.yaml
+    run_name: standard-resnet-eps04
+  - path: ../experiments/standard-resnet-eps05.yaml
+    run_name: standard-resnet-eps05
+  - path: ../experiments/standard-resnet-eps06.yaml
+    run_name: standard-resnet-eps06
+  - path: ../experiments/standard-resnet-eps07.yaml
+    run_name: standard-resnet-eps07
