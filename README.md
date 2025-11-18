@@ -108,6 +108,25 @@ Each job resolves its referenced config, applies overrides, and runs sequentiall
 by default. Provide `--resume` when re-running a queue that specifies `run_name`
 values to continue unfinished jobs without repeating completed ones.
 
+### ⚡️ Parallel R-SMoE Runs
+
+R-SMoE reconstructs each example independently, so you can overlap multiple runs on
+a multi-GPU machine. Set `max_concurrent_jobs` on the defense config to control
+how many reconstructions run simultaneously. Provide `device_ids` (list of CUDA
+indices) to pin each worker to a single GPU—the defense sets `CUDA_VISIBLE_DEVICES`
+for you. When `device_ids` is omitted the jobs inherit whatever GPU visibility you
+use outside the CLI. If you only provide `device_ids`, the concurrency defaults to
+their length.
+
+```yaml
+defenses:
+  - type: r-smoe
+    params:
+      ...
+      max_concurrent_jobs: 4
+      device_ids: [0, 1, 2, 3]
+```
+
 ## 🙏 Acknowledgements
 
 This project uses Yi-Hsin Li's R-SMoE implementation for the SMoE defense component

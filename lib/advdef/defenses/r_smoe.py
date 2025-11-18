@@ -4,10 +4,13 @@ from __future__ import annotations
 
 import importlib
 import logging
+import os
 import shutil
 import subprocess
 import sys
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
+from queue import SimpleQueue
 from typing import List, Optional, Sequence
 
 import numpy as np
@@ -239,6 +242,7 @@ def run_training(
     extra_args: Optional[Sequence[str]],
     working_dir: Path,
     log_path: Path,
+    env: dict[str, str] | None = None,
 ) -> None:
     script_path = train_script.resolve()
     dataset_dir = dataset_dir.resolve()
@@ -272,6 +276,7 @@ def run_training(
             cwd=str(working_dir),
             stdout=log_file,
             stderr=subprocess.STDOUT,
+            env=env,
             check=False,
         )
     if result.returncode != 0:
@@ -338,6 +343,25 @@ class RSMoEDefense(Defense):
 
             extra_args_seq: Optional[Sequence[str]] = extra_args_list if extra_args_list else None
 
+            raw_device_ids = params.get("device_ids")
+            device_ids: list[str] | None = None
+            if raw_device_ids is not None:
+                if not isinstance(raw_device_ids, Sequence) or isinstance(raw_device_ids, (str, bytes)):
+                    raise ValueError("device_ids must be a sequence of GPU identifiers.")
+                device_ids = [str(device_id) for device_id in raw_device_ids]
+                if not device_ids:
+                    raise ValueError("device_ids cannot be empty.")
+
+            max_jobs_param = params.get("max_concurrent_jobs")
+            if max_jobs_param is None:
+                max_concurrent_jobs = len(device_ids) if device_ids else 1
+            else:
+                max_concurrent_jobs = int(max_jobs_param)
+                if max_concurrent_jobs < 1:
+                    raise ValueError("max_concurrent_jobs must be at least 1.")
+            if device_ids:
+                max_concurrent_jobs = min(max_concurrent_jobs, len(device_ids)) or 1
+
             if params.get("train_script"):
                 train_script = Path(params["train_script"])
             else:
@@ -358,6 +382,8 @@ class RSMoEDefense(Defense):
                 "train_script": train_script,
                 "n_multi_model": n_multi_model,
                 "image_filename": image_filename,
+                "max_concurrent_jobs": max_concurrent_jobs,
+                "device_ids": device_ids,
             }
         return self._params_cache
 
@@ -372,6 +398,8 @@ class RSMoEDefense(Defense):
         train_script = params["train_script"]  # type: ignore[index]
         n_multi_model = params["n_multi_model"]
         file_name_prefix_param = params["file_name_prefix"]
+        max_concurrent_jobs = params["max_concurrent_jobs"]  # type: ignore[index]
+        device_ids = params["device_ids"]
 
         self._variant_images = {}
         total_images = 0
@@ -386,13 +414,15 @@ class RSMoEDefense(Defense):
             extra_args_display = " ".join(extra_args_list) if extra_args_list else "<none>"
             n_multi_model_display = n_multi_model if n_multi_model is not None else "<unused>"
             file_prefix_display = file_name_prefix_param if file_name_prefix_param is not None else "<variant>"
+            device_ids_display = ", ".join(device_ids) if device_ids else "<all-visible>"
             print(
                 "[info] R-SMOE settings: "
                 f"config={self.config.name or self._config_identifier} "
                 f"root={r_smoe_root} mode={mode} iterations={iterations} npcs={npcs} "
                 f"n_multi_model={n_multi_model_display} skip_existing={skip_existing} "
                 f"file_prefix={file_prefix_display} extra_args={extra_args_display} "
-                f"train_script={train_script}"
+                f"train_script={train_script} parallel_jobs={max_concurrent_jobs} "
+                f"device_ids={device_ids_display}"
             )
             self._settings_reported = True
 
@@ -418,6 +448,8 @@ class RSMoEDefense(Defense):
         n_multi_model = params["n_multi_model"]
         image_filename = params["image_filename"]  # type: ignore[index]
         file_name_prefix_param = params["file_name_prefix"]
+        max_concurrent_jobs = params["max_concurrent_jobs"]  # type: ignore[index]
+        device_ids = params["device_ids"]
 
         file_name_prefix = file_name_prefix_param if file_name_prefix_param is not None else variant.name
 
@@ -452,7 +484,16 @@ class RSMoEDefense(Defense):
             self._recon_progress = progress
         results: List[Path] = []
 
-        for dataset_dir in prepared_datasets:
+        rsmoe_data_root = ensure_dir(r_smoe_root / "data")
+        worker_count = max(1, max_concurrent_jobs)
+        device_queue: SimpleQueue[str] | None = None
+        if device_ids:
+            worker_count = min(worker_count, len(device_ids)) or 1
+            device_queue = SimpleQueue()
+            for device_id in device_ids:
+                device_queue.put(device_id)
+
+        def process_dataset(dataset_dir: Path) -> Path:
             image_name = dataset_dir.name
             dest_image = recon_root / f"{image_name}.png"
             model_dir = models_root / image_name
@@ -460,10 +501,7 @@ class RSMoEDefense(Defense):
 
             if skip_existing and dest_image.exists():
                 logging.debug("Skipping %s (reconstruction already exists).", image_name)
-                results.append(dest_image)
-                if progress is not None:
-                    progress.update()
-                continue
+                return dest_image
 
             ensure_dir(model_dir)
             file_name = f"{file_name_prefix}_{image_name}"
@@ -471,7 +509,6 @@ class RSMoEDefense(Defense):
             if mode == "denoise":
                 ensure_denoise_layout(model_dir, iterations)
 
-            rsmoe_data_root = ensure_dir(r_smoe_root / "data")
             symlink_dir = rsmoe_data_root / image_name
             dataset_dir_abs = dataset_dir.resolve()
             if symlink_dir.exists() or symlink_dir.is_symlink():
@@ -484,26 +521,51 @@ class RSMoEDefense(Defense):
             except OSError:
                 shutil.copytree(dataset_dir_abs, symlink_dir)
 
-            logging.debug("R-SMOE processing %s", image_name)
-            logging.info("R-SMOE processing %s (log: %s)", image_name, log_path)
-            run_training(
-                train_script=train_script,
-                dataset_dir=dataset_dir_abs,
-                model_dir=model_dir,
-                iterations=iterations,
-                npcs=npcs,
-                file_name=file_name,
-                extra_args=extra_args_seq,
-                working_dir=r_smoe_root,
-                log_path=log_path,
-            )
+            assigned_device: str | None = None
+            env: dict[str, str] | None = None
+            if device_queue is not None:
+                assigned_device = device_queue.get()
+                env = os.environ.copy()
+                env["CUDA_VISIBLE_DEVICES"] = assigned_device
+
+            try:
+                logging.debug("R-SMOE processing %s", image_name)
+                logging.info("R-SMOE processing %s (log: %s)", image_name, log_path)
+                run_training(
+                    train_script=train_script,
+                    dataset_dir=dataset_dir_abs,
+                    model_dir=model_dir,
+                    iterations=iterations,
+                    npcs=npcs,
+                    file_name=file_name,
+                    extra_args=extra_args_seq,
+                    working_dir=r_smoe_root,
+                    log_path=log_path,
+                    env=env,
+                )
+            finally:
+                if assigned_device is not None and device_queue is not None:
+                    device_queue.put(assigned_device)
 
             render_path = find_render(model_dir)
             logging.debug("Copying %s -> %s", render_path, dest_image)
             shutil.copy2(render_path, dest_image)
-            results.append(dest_image)
-            if progress is not None:
-                progress.update()
+            return dest_image
+
+        if worker_count == 1:
+            for dataset_dir in prepared_datasets:
+                dest_image = process_dataset(dataset_dir)
+                results.append(dest_image)
+                if progress is not None:
+                    progress.update()
+        else:
+            with ThreadPoolExecutor(max_workers=worker_count) as executor:
+                futures = {executor.submit(process_dataset, dataset_dir): dataset_dir for dataset_dir in prepared_datasets}
+                for future in as_completed(futures):
+                    dest_image = future.result()
+                    results.append(dest_image)
+                    if progress is not None:
+                        progress.update()
 
         metadata = {
             "defense": "r-smoe",
@@ -518,7 +580,10 @@ class RSMoEDefense(Defense):
             "config_name": self.config.name,
             "config_identifier": self._config_identifier,
             "file_name_prefix": file_name_prefix,
+            "max_concurrent_jobs": max_concurrent_jobs,
         }
+        if device_ids:
+            metadata["device_ids"] = list(device_ids)
         if n_multi_model is not None:
             metadata["n_multi_model"] = n_multi_model
 
