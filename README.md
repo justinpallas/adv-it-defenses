@@ -118,6 +118,12 @@ for you. When `device_ids` is omitted the jobs inherit whatever GPU visibility y
 use outside the CLI. If you only provide `device_ids`, the concurrency defaults to
 their length.
 
+Each reconstruction subprocess also spins up R-SMoE's GUI listener; to avoid port
+collisions we automatically launch them on port `0` (let the OS choose) whenever
+parallel jobs are enabled. If you want to connect an external GUI, set `gui_port`
+in the config (or pass `--port` inside `extra_args`) so every run uses a known
+port.
+
 ```yaml
 defenses:
   - type: r-smoe
@@ -125,6 +131,7 @@ defenses:
       ...
       max_concurrent_jobs: 4
       device_ids: [0, 1, 2, 3]
+      gui_port: 6010  # optional, only needed when using the viewer
 ```
 
 ## 🙏 Acknowledgements

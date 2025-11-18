@@ -242,6 +242,7 @@ def run_training(
     extra_args: Optional[Sequence[str]],
     working_dir: Path,
     log_path: Path,
+    gui_port: int | None,
     env: dict[str, str] | None = None,
 ) -> None:
     script_path = train_script.resolve()
@@ -267,6 +268,8 @@ def run_training(
         cmd.extend(["--npcs", str(npcs)])
     if extra_args:
         cmd.extend(extra_args)
+    if gui_port is not None:
+        cmd.extend(["--port", str(gui_port)])
 
     logging.debug("Running: %s", " ".join(cmd))
     ensure_dir(working_dir / "all_result")
@@ -333,6 +336,11 @@ class RSMoEDefense(Defense):
 
             extra_args = params.get("extra_args")
             extra_args_list: List[str] = list(extra_args) if extra_args else []
+            user_override_port = False
+            for arg in extra_args_list:
+                if arg == "--port" or arg.startswith("--port="):
+                    user_override_port = True
+                    break
 
             n_multi_model: Optional[int]
             if mode == "denoise":
@@ -342,6 +350,13 @@ class RSMoEDefense(Defense):
                 n_multi_model = None
 
             extra_args_seq: Optional[Sequence[str]] = extra_args_list if extra_args_list else None
+
+            gui_port_param = params.get("gui_port")
+            gui_port: int | None = None
+            if gui_port_param is not None:
+                gui_port = int(gui_port_param)
+                if gui_port < 0 or gui_port > 65535:
+                    raise ValueError("gui_port must be between 0 and 65535.")
 
             raw_device_ids = params.get("device_ids")
             device_ids: list[str] | None = None
@@ -361,6 +376,8 @@ class RSMoEDefense(Defense):
                     raise ValueError("max_concurrent_jobs must be at least 1.")
             if device_ids:
                 max_concurrent_jobs = min(max_concurrent_jobs, len(device_ids)) or 1
+            if gui_port is None and not user_override_port:
+                gui_port = 0 if max_concurrent_jobs > 1 else None
 
             if params.get("train_script"):
                 train_script = Path(params["train_script"])
@@ -384,6 +401,7 @@ class RSMoEDefense(Defense):
                 "image_filename": image_filename,
                 "max_concurrent_jobs": max_concurrent_jobs,
                 "device_ids": device_ids,
+                "gui_port": gui_port,
             }
         return self._params_cache
 
@@ -400,6 +418,7 @@ class RSMoEDefense(Defense):
         file_name_prefix_param = params["file_name_prefix"]
         max_concurrent_jobs = params["max_concurrent_jobs"]  # type: ignore[index]
         device_ids = params["device_ids"]
+        gui_port = params["gui_port"]
 
         self._variant_images = {}
         total_images = 0
@@ -415,6 +434,7 @@ class RSMoEDefense(Defense):
             n_multi_model_display = n_multi_model if n_multi_model is not None else "<unused>"
             file_prefix_display = file_name_prefix_param if file_name_prefix_param is not None else "<variant>"
             device_ids_display = ", ".join(device_ids) if device_ids else "<all-visible>"
+            gui_port_display = gui_port if gui_port is not None else "<default>"
             print(
                 "[info] R-SMOE settings: "
                 f"config={self.config.name or self._config_identifier} "
@@ -422,7 +442,7 @@ class RSMoEDefense(Defense):
                 f"n_multi_model={n_multi_model_display} skip_existing={skip_existing} "
                 f"file_prefix={file_prefix_display} extra_args={extra_args_display} "
                 f"train_script={train_script} parallel_jobs={max_concurrent_jobs} "
-                f"device_ids={device_ids_display}"
+                f"device_ids={device_ids_display} gui_port={gui_port_display}"
             )
             self._settings_reported = True
 
@@ -450,6 +470,7 @@ class RSMoEDefense(Defense):
         file_name_prefix_param = params["file_name_prefix"]
         max_concurrent_jobs = params["max_concurrent_jobs"]  # type: ignore[index]
         device_ids = params["device_ids"]
+        gui_port = params["gui_port"]
 
         file_name_prefix = file_name_prefix_param if file_name_prefix_param is not None else variant.name
 
@@ -541,6 +562,7 @@ class RSMoEDefense(Defense):
                     extra_args=extra_args_seq,
                     working_dir=r_smoe_root,
                     log_path=log_path,
+                    gui_port=gui_port,
                     env=env,
                 )
             finally:
@@ -582,6 +604,8 @@ class RSMoEDefense(Defense):
             "file_name_prefix": file_name_prefix,
             "max_concurrent_jobs": max_concurrent_jobs,
         }
+        if gui_port is not None:
+            metadata["gui_port"] = gui_port
         if device_ids:
             metadata["device_ids"] = list(device_ids)
         if n_multi_model is not None:
