@@ -4,13 +4,16 @@ from __future__ import annotations
 
 import importlib
 import logging
+import math
 import os
 import shutil
 import subprocess
 import sys
+import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from queue import SimpleQueue
+from threading import Lock
 from typing import List, Optional, Sequence
 
 import numpy as np
@@ -513,6 +516,29 @@ class RSMoEDefense(Defense):
             device_queue = SimpleQueue()
             for device_id in device_ids:
                 device_queue.put(device_id)
+        worker_count = min(worker_count, len(prepared_datasets)) or 1
+
+        duration_lock = Lock()
+        total_duration = 0.0
+        completed_images = 0
+
+        def record_completion(duration: float) -> float | None:
+            nonlocal total_duration, completed_images
+            with duration_lock:
+                completed_images += 1
+                total_duration += max(0.0, duration)
+                count = completed_images
+                total = total_duration
+            remaining = max(0, len(prepared_datasets) - count)
+            if count == 0:
+                return None
+            if remaining == 0:
+                return 0.0
+            if total <= 0.0:
+                return None
+            avg_duration = total / count
+            batches = math.ceil(remaining / worker_count)
+            return avg_duration * batches
 
         def process_dataset(dataset_dir: Path) -> Path:
             image_name = dataset_dir.name
@@ -522,6 +548,11 @@ class RSMoEDefense(Defense):
 
             if skip_existing and dest_image.exists():
                 logging.debug("Skipping %s (reconstruction already exists).", image_name)
+                eta_override = record_completion(0.0)
+                if progress is not None:
+                    if worker_count > 1 and eta_override is not None:
+                        progress.set_eta_override(eta_override)
+                    progress.update()
                 return dest_image
 
             ensure_dir(model_dir)
@@ -549,6 +580,7 @@ class RSMoEDefense(Defense):
                 env = os.environ.copy()
                 env["CUDA_VISIBLE_DEVICES"] = assigned_device
 
+            job_start = time.monotonic()
             try:
                 logging.debug("R-SMOE processing %s", image_name)
                 logging.info("R-SMOE processing %s (log: %s)", image_name, log_path)
@@ -572,22 +604,23 @@ class RSMoEDefense(Defense):
             render_path = find_render(model_dir)
             logging.debug("Copying %s -> %s", render_path, dest_image)
             shutil.copy2(render_path, dest_image)
+            eta_override = record_completion(time.monotonic() - job_start)
+            if progress is not None:
+                if worker_count > 1 and eta_override is not None:
+                    progress.set_eta_override(eta_override)
+                progress.update()
             return dest_image
 
         if worker_count == 1:
             for dataset_dir in prepared_datasets:
                 dest_image = process_dataset(dataset_dir)
                 results.append(dest_image)
-                if progress is not None:
-                    progress.update()
         else:
             with ThreadPoolExecutor(max_workers=worker_count) as executor:
                 futures = {executor.submit(process_dataset, dataset_dir): dataset_dir for dataset_dir in prepared_datasets}
                 for future in as_completed(futures):
                     dest_image = future.result()
                     results.append(dest_image)
-                    if progress is not None:
-                        progress.update()
 
         metadata = {
             "defense": "r-smoe",

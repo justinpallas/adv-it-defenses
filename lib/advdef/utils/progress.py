@@ -51,6 +51,7 @@ class Progress:
         self._last_render = 0.0
         self._last_line_len = 0
         self._closed = False
+        self._eta_override: float | None = None
         if total == 0:
             self.state.total = 1
         self._render(force=True)
@@ -103,6 +104,13 @@ class Progress:
             return
         self._render(force=True)
 
+    def set_eta_override(self, eta_seconds: float | None) -> None:
+        """Override the displayed ETA (provide seconds, or None to reset)."""
+        if eta_seconds is None or math.isinf(eta_seconds):
+            self._eta_override = None
+        else:
+            self._eta_override = max(0.0, eta_seconds)
+
     def _render(self, *, force: bool = False) -> None:
         now = time.monotonic()
         if not force and (now - self._last_render) < self._min_interval:
@@ -116,6 +124,8 @@ class Progress:
         rate = completed / elapsed if elapsed > 0 else 0.0
         remaining = max(0, total - completed)
         eta = remaining / rate if rate > 0 else math.inf
+        if self._eta_override is not None:
+            eta = self._eta_override
 
         filled = int(self._bar_width * fraction)
         bar = "#" * filled + "-" * (self._bar_width - filled)
