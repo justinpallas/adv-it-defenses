@@ -31,7 +31,6 @@ from advdef.defenses.smoe_ae import SmoeAE
 
 def _build_tf_model(block_size: int, kernel_num: int, predict_covariance: bool) -> tf.keras.Model:
     inputs = tf.keras.Input(shape=(block_size, block_size, 1))
-
     if block_size == 8:
         conv_channels = [16, 32, 64, 128, 256, 512, 1024]
         dense_layers = [1024, 512, 256, 128, 64]
@@ -53,25 +52,44 @@ def _build_tf_model(block_size: int, kernel_num: int, predict_covariance: bool) 
     return tf.keras.Model(inputs=inputs, outputs=outputs)
 
 
-def _map_weights(tf_model: tf.keras.Model, torch_model: nn.Module) -> dict:
-    torch_state = torch_model.state_dict()
-    torch_keys: List[str] = [k for k in torch_state.keys() if k.startswith("encoder")]
-    tf_weights = tf_model.trainable_variables
+def _assign_weights(tf_model: tf.keras.Model, torch_model: nn.Module) -> None:
+    """Map Conv2D/Dense weights explicitly onto the torch encoder."""
+    from advdef.defenses.smoe_ae import _ConvBlock  # local import to avoid circular issues
 
-    if len(torch_keys) != len(tf_weights):
-        raise RuntimeError(
-            f"Mismatch in variable count: torch={len(torch_keys)}, tensorflow={len(tf_weights)}"
-        )
+    conv_modules: list[nn.Conv2d] = []
+    for module in torch_model.encoder.features:  # type: ignore[attr-defined]
+        if isinstance(module, nn.Conv2d):
+            conv_modules.append(module)
+        elif isinstance(module, _ConvBlock):
+            conv_modules.append(module.conv)
 
-    for key, tf_var in zip(torch_keys, tf_weights):
-        array = tf_var.numpy()
-        if "weight" in key and array.ndim == 4:
-            array = array.transpose(3, 2, 0, 1)
-        elif "weight" in key and array.ndim == 2:
-            array = array.T
-        torch_state[key] = torch.tensor(array)
+    linear_modules: list[nn.Linear] = [m for m in torch_model.encoder.head if isinstance(m, nn.Linear)]  # type: ignore[attr-defined]
 
-    return torch_state
+    tf_conv_params: list[tuple[tf.Tensor, tf.Tensor]] = []
+    tf_dense_params: list[tuple[tf.Tensor, tf.Tensor]] = []
+
+    for layer in tf_model.layers:
+        if isinstance(layer, tf.keras.layers.Conv2D):
+            tf_conv_params.append((layer.kernel, layer.bias))
+        elif isinstance(layer, tf.keras.layers.Dense):
+            tf_dense_params.append((layer.kernel, layer.bias))
+
+    if len(conv_modules) != len(tf_conv_params):
+        raise RuntimeError(f"Conv layer count mismatch (tf={len(tf_conv_params)}, torch={len(conv_modules)})")
+    if len(linear_modules) != len(tf_dense_params):
+        raise RuntimeError(f"Dense layer count mismatch (tf={len(tf_dense_params)}, torch={len(linear_modules)})")
+
+    for module, (kernel, bias) in zip(conv_modules, tf_conv_params, strict=False):
+        k_np = kernel.numpy().transpose(3, 2, 0, 1)
+        b_np = bias.numpy()
+        module.weight.data = torch.tensor(k_np, dtype=module.weight.dtype)
+        module.bias.data = torch.tensor(b_np, dtype=module.bias.dtype)
+
+    for module, (kernel, bias) in zip(linear_modules, tf_dense_params, strict=False):
+        k_np = kernel.numpy().T  # Keras Dense: [in, out]; torch Linear: [out, in]
+        b_np = bias.numpy()
+        module.weight.data = torch.tensor(k_np, dtype=module.weight.dtype)
+        module.bias.data = torch.tensor(b_np, dtype=module.bias.dtype)
 
 
 def main() -> None:
@@ -100,8 +118,8 @@ def main() -> None:
         kernel_num=args.kernel_num,
         predict_covariance=predict_covariance,
     )
-    mapped_state = _map_weights(tf_model, torch_model)
-    torch.save(mapped_state, args.output)
+    _assign_weights(tf_model, torch_model)
+    torch.save(torch_model.state_dict(), args.output)
 
     print(f"[ok] Saved PyTorch weights to {args.output}")
 

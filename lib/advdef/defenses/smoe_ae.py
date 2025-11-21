@@ -151,8 +151,13 @@ class SmoeDecoder(nn.Module):
         if self.predict_covariance:
             a_flat = params[:, 3 * k :].view(-1, k, 2, 2)
             a_tril = torch.tril(a_flat)
-            ax = torch.matmul(a_tril.unsqueeze(2), x_sub_mu).squeeze(-1)  # [B, k, p, 2]
-            exponent = -0.5 * torch.sum(ax * ax, dim=-1)
+            exponent = -0.5 * torch.einsum(
+                "abcli,ablm,abnm,abcnj->abc",
+                x_sub_mu,
+                a_tril,
+                a_tril,
+                x_sub_mu,
+            )
         else:
             dist_sq = torch.sum(x_sub_mu.squeeze(-1) ** 2, dim=-1)
             exponent = -dist_sq / max(self.sigma_x, 1e-6)
