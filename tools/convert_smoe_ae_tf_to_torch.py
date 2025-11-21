@@ -15,8 +15,9 @@ This script mirrors the demo architectures:
 from __future__ import annotations
 
 import argparse
+import re
 from pathlib import Path
-from typing import List
+from typing import Dict, List, Tuple
 
 import torch
 import torch.nn as nn
@@ -29,66 +30,72 @@ except ModuleNotFoundError as exc:  # pragma: no cover - depends on user environ
 from advdef.defenses.smoe_ae import SmoeAE
 
 
-def _build_tf_model(block_size: int, kernel_num: int, predict_covariance: bool) -> tf.keras.Model:
-    inputs = tf.keras.Input(shape=(block_size, block_size, 1))
-    if block_size == 8:
-        conv_channels = [16, 32, 64, 128, 256, 512, 1024]
-        dense_layers = [1024, 512, 256, 128, 64]
-    else:
-        conv_channels = [16, 32, 64, 128, 256, 512]
-        dense_layers = [512, 256, 128, 64]
-
-    x = inputs
-    for filters in conv_channels:
-        x = tf.keras.layers.Conv2D(filters, (3, 3), padding="same", activation="relu")(x)
-    x = tf.keras.layers.Flatten()(x)
-    for units in dense_layers:
-        x = tf.keras.layers.Dense(units, activation="relu")(x)
-
-    out_features = kernel_num * 3
-    if predict_covariance:
-        out_features += kernel_num * 4
-    outputs = tf.keras.layers.Dense(out_features, activation="linear")(x)
-    return tf.keras.Model(inputs=inputs, outputs=outputs)
+def _load_raw_checkpoint(path: Path) -> Dict[str, tf.Tensor]:
+    """Load raw tensors from a TF checkpoint (no Keras restore)."""
+    reader = tf.train.load_checkpoint(str(path))
+    tensors: Dict[str, tf.Tensor] = {}
+    for name in sorted(reader.get_variable_to_shape_map().keys()):
+        tensors[name] = reader.get_tensor(name)
+    return tensors
 
 
-def _assign_weights(tf_model: tf.keras.Model, torch_model: nn.Module) -> None:
-    """Map Conv2D/Dense weights explicitly onto the torch encoder."""
+def _assign_weights_from_raw(tensors: Dict[str, tf.Tensor], torch_model: nn.Module) -> None:
+    """Map raw checkpoint conv/dense tensors into the torch encoder."""
     from advdef.defenses.smoe_ae import _ConvBlock  # local import to avoid circular issues
 
-    conv_modules: list[nn.Conv2d] = []
+    conv_modules: List[nn.Conv2d] = []
     for module in torch_model.encoder.features:  # type: ignore[attr-defined]
         if isinstance(module, nn.Conv2d):
             conv_modules.append(module)
         elif isinstance(module, _ConvBlock):
             conv_modules.append(module.conv)
 
-    linear_modules: list[nn.Linear] = [m for m in torch_model.encoder.head if isinstance(m, nn.Linear)]  # type: ignore[attr-defined]
+    linear_modules: List[nn.Linear] = [m for m in torch_model.encoder.head if isinstance(m, nn.Linear)]  # type: ignore[attr-defined]
 
-    tf_conv_params: list[tuple[tf.Tensor, tf.Tensor]] = []
-    tf_dense_params: list[tuple[tf.Tensor, tf.Tensor]] = []
+    conv_pairs: List[Tuple[np.ndarray, np.ndarray]] = []
+    dense_pairs: List[Tuple[np.ndarray, np.ndarray]] = []
 
-    for layer in tf_model.layers:
-        if isinstance(layer, tf.keras.layers.Conv2D):
-            tf_conv_params.append((layer.kernel, layer.bias))
-        elif isinstance(layer, tf.keras.layers.Dense):
-            tf_dense_params.append((layer.kernel, layer.bias))
+    # Layer naming in the checkpoint follows layer_with_weights-{idx}/{kernel|bias}/.ATTRIBUTES/VARIABLE_VALUE
+    pattern = re.compile(r"layer_with_weights-(\d+)/(kernel|bias)/")
+    parsed: Dict[int, Dict[str, np.ndarray]] = {}
+    for name, tensor in tensors.items():
+        match = pattern.search(name)
+        if match:
+            idx = int(match.group(1))
+            kind = match.group(2)
+            if "OPTIMIZER_SLOT" in name:
+                continue
+            parsed.setdefault(idx, {})[kind] = tensor
 
-    if len(conv_modules) != len(tf_conv_params):
-        raise RuntimeError(f"Conv layer count mismatch (tf={len(tf_conv_params)}, torch={len(conv_modules)})")
-    if len(linear_modules) != len(tf_dense_params):
-        raise RuntimeError(f"Dense layer count mismatch (tf={len(tf_dense_params)}, torch={len(linear_modules)})")
+    for idx in sorted(parsed.keys()):
+        entry = parsed[idx]
+        if "kernel" in entry and "bias" in entry:
+            if len(conv_pairs) < len(conv_modules):
+                conv_pairs.append((entry["kernel"], entry["bias"]))
+            else:
+                dense_pairs.append((entry["kernel"], entry["bias"]))
 
-    for module, (kernel, bias) in zip(conv_modules, tf_conv_params, strict=False):
-        k_np = kernel.numpy().transpose(3, 2, 0, 1)
-        b_np = bias.numpy()
-        module.weight.data = torch.tensor(k_np, dtype=module.weight.dtype)
+    if not conv_pairs or not dense_pairs:
+        available = ", ".join(list(tensors.keys())[:20])
+        raise RuntimeError(f"No matched conv/dense pairs found. Sample tensors: {available}")
+
+    if len(conv_pairs) < len(conv_modules):
+        raise RuntimeError(f"Conv layer count mismatch (tf={len(conv_pairs)}, torch={len(conv_modules)})")
+    if len(dense_pairs) < len(linear_modules):
+        raise RuntimeError(f"Dense layer count mismatch (tf={len(dense_pairs)}, torch={len(linear_modules)})")
+
+    # If checkpoint contains extra dense layers (e.g., different architecture order), take the last ones.
+    if len(conv_pairs) > len(conv_modules):
+        conv_pairs = conv_pairs[-len(conv_modules):]
+    if len(dense_pairs) > len(linear_modules):
+        dense_pairs = dense_pairs[-len(linear_modules):]
+
+    for module, (k_np, b_np) in zip(conv_modules, conv_pairs, strict=False):
+        module.weight.data = torch.tensor(k_np.transpose(3, 2, 0, 1), dtype=module.weight.dtype)
         module.bias.data = torch.tensor(b_np, dtype=module.bias.dtype)
 
-    for module, (kernel, bias) in zip(linear_modules, tf_dense_params, strict=False):
-        k_np = kernel.numpy().T  # Keras Dense: [in, out]; torch Linear: [out, in]
-        b_np = bias.numpy()
-        module.weight.data = torch.tensor(k_np, dtype=module.weight.dtype)
+    for module, (k_np, b_np) in zip(linear_modules, dense_pairs, strict=False):
+        module.weight.data = torch.tensor(k_np.T, dtype=module.weight.dtype)  # TF: [H, W], torch: [W, H]
         module.bias.data = torch.tensor(b_np, dtype=module.bias.dtype)
 
 
@@ -107,18 +114,14 @@ def main() -> None:
 
     predict_covariance = args.predict_covariance or args.block_size == 8
 
-    tf_model = _build_tf_model(args.block_size, args.kernel_num, predict_covariance)
-    # Older checkpoints are TF Checkpoints (.index/.data). Keras 3 dropped direct support
-    # for the TF format in load_weights, so restore via tf.train.Checkpoint.
-    ckpt = tf.train.Checkpoint(model=tf_model)
-    ckpt.restore(str(args.checkpoint)).expect_partial()
-
     torch_model = SmoeAE(
         block_size=args.block_size,
         kernel_num=args.kernel_num,
         predict_covariance=predict_covariance,
     )
-    _assign_weights(tf_model, torch_model)
+
+    tensors = _load_raw_checkpoint(args.checkpoint)
+    _assign_weights_from_raw(tensors, torch_model)
     torch.save(torch_model.state_dict(), args.output)
 
     print(f"[ok] Saved PyTorch weights to {args.output}")

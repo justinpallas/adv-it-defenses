@@ -99,7 +99,8 @@ class SmoeEncoder(nn.Module):
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """Return raw SMoE parameters for each block."""
         h = self.features(x)
-        h = torch.flatten(h, 1)
+        # Match Keras/TF NHWC flatten order for weight compatibility.
+        h = torch.flatten(h.permute(0, 2, 3, 1).contiguous(), 1)
         params = self.head(h)
         if self.predict_covariance:
             center_nus = torch.clamp(params[:, : self.kernel_num * 3], 0.0, 1.0)
