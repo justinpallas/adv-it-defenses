@@ -8,6 +8,7 @@ import textwrap
 
 import numpy as np
 from PIL import Image
+import torch
 
 from advdef.config import DefenseConfig
 from advdef.core.pipeline import DatasetVariant
@@ -18,6 +19,7 @@ from advdef.defenses.flip import FlipDefense
 from advdef.defenses.grayscale import GrayscaleDefense
 from advdef.defenses.jpeg import JPEGDefense
 from advdef.defenses.low_pass import LowPassDefense
+from advdef.defenses.smoe_ae import SmoeAEDefense, SmoeAE
 from advdef.defenses.tvm import TVMDefense
 from advdef.utils import ensure_dir
 
@@ -474,3 +476,29 @@ def test_crop_resize_warns_and_upsamples(tmp_path):
 
     result = np.array(Image.open(output_path))
     assert result.shape == (16, 16)
+
+
+def test_smoe_ae_reconstructs_rgb_and_preserves_size(tmp_path):
+    torch.manual_seed(0)
+    model = SmoeAE(block_size=8, predict_covariance=True)
+    weights_path = tmp_path / "smoe_ae.pt"
+    torch.save(model.state_dict(), weights_path)
+
+    arr = np.random.randint(0, 256, size=(10, 13, 3), dtype=np.uint8)
+
+    output_path = _execute_defense(
+        tmp_path,
+        SmoeAEDefense,
+        "smoe-ae",
+        {
+            "block_size": 8,
+            "weights_path": str(weights_path),
+            "workers": 1,
+            "batch_blocks": 8,
+        },
+        arr,
+    )
+
+    result = np.array(Image.open(output_path))
+    assert result.shape == arr.shape
+    assert result.dtype == np.uint8

@@ -19,3 +19,4 @@ from .evaluation import imagenet  # noqa: F401
 from .defenses import bm3d  # noqa: F401
 from .defenses import jpeg  # noqa: F401
 from .defenses import r_smoe  # noqa: F401
+from .defenses import smoe_ae  # noqa: F401

@@ -28,3 +28,9 @@ build/
 .pytest_cache/
 .ruff_cache/
 .mypy_cache/
+
+# SMoE-AE weights
+external/smoe-ae
+
+# configs
+configs
