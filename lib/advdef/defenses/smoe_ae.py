@@ -251,12 +251,9 @@ class _SmoeRunner:
         h_blocks = channel.shape[2] // block
         w_blocks = channel.shape[3] // block
 
-        blocks = (
-            channel.unfold(2, block, block)
-            .unfold(3, block, block)
-            .contiguous()
-            .view(-1, 1, block, block)
-        )
+        blocks = channel.unfold(2, block, block).unfold(3, block, block)
+        # Reorder to (B, C, H_blocks, W_blocks, block, block) before flattening.
+        blocks = blocks.permute(0, 1, 2, 4, 3, 5).contiguous().view(-1, 1, block, block)
 
         outputs: list[torch.Tensor] = []
         with torch.no_grad():
