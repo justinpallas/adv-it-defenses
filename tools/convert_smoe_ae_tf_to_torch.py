@@ -15,7 +15,6 @@ This script mirrors the demo architectures:
 from __future__ import annotations
 
 import argparse
-import re
 from pathlib import Path
 from typing import Dict, List, Tuple
 
@@ -55,40 +54,44 @@ def _assign_weights_from_raw(tensors: Dict[str, tf.Tensor], torch_model: nn.Modu
     conv_pairs: List[Tuple[np.ndarray, np.ndarray]] = []
     dense_pairs: List[Tuple[np.ndarray, np.ndarray]] = []
 
-    # Layer naming in the checkpoint follows layer_with_weights-{idx}/{kernel|bias}/.ATTRIBUTES/VARIABLE_VALUE
-    pattern = re.compile(r"layer_with_weights-(\d+)/(kernel|bias)/")
-    parsed: Dict[int, Dict[str, np.ndarray]] = {}
+    # Collect layer_with_weights-{idx}/{kernel|bias}/.ATTRIBUTES/VARIABLE_VALUE
+    entries: List[Tuple[int, np.ndarray | None, np.ndarray | None]] = []
     for name, tensor in tensors.items():
-        match = pattern.search(name)
-        if match:
-            idx = int(match.group(1))
-            kind = match.group(2)
-            if "OPTIMIZER_SLOT" in name:
-                continue
-            parsed.setdefault(idx, {})[kind] = tensor
+        if "layer_with_weights-" not in name or "OPTIMIZER_SLOT" in name:
+            continue
+        if "/kernel/" in name:
+            idx = int(name.split("layer_with_weights-")[1].split("/")[0])
+            entries.append((idx, tensor, None))
+        elif "/bias/" in name:
+            idx = int(name.split("layer_with_weights-")[1].split("/")[0])
+            entries.append((idx, None, tensor))
 
-    for idx in sorted(parsed.keys()):
-        entry = parsed[idx]
+    # Aggregate kernels/biases by index.
+    by_idx: Dict[int, Dict[str, np.ndarray]] = {}
+    for idx, kernel, bias in entries:
+        slot = by_idx.setdefault(idx, {})
+        if kernel is not None:
+            slot["kernel"] = kernel
+        if bias is not None:
+            slot["bias"] = bias
+
+    for idx in sorted(by_idx.keys()):
+        entry = by_idx[idx]
         if "kernel" in entry and "bias" in entry:
-            if len(conv_pairs) < len(conv_modules):
-                conv_pairs.append((entry["kernel"], entry["bias"]))
-            else:
-                dense_pairs.append((entry["kernel"], entry["bias"]))
+            k = entry["kernel"]
+            b = entry["bias"]
+            if k.ndim == 4:
+                conv_pairs.append((k, b))
+            elif k.ndim == 2:
+                dense_pairs.append((k, b))
 
-    if not conv_pairs or not dense_pairs:
-        available = ", ".join(list(tensors.keys())[:20])
-        raise RuntimeError(f"No matched conv/dense pairs found. Sample tensors: {available}")
-
-    if len(conv_pairs) < len(conv_modules):
-        raise RuntimeError(f"Conv layer count mismatch (tf={len(conv_pairs)}, torch={len(conv_modules)})")
-    if len(dense_pairs) < len(linear_modules):
-        raise RuntimeError(f"Dense layer count mismatch (tf={len(dense_pairs)}, torch={len(linear_modules)})")
-
-    # If checkpoint contains extra dense layers (e.g., different architecture order), take the last ones.
-    if len(conv_pairs) > len(conv_modules):
-        conv_pairs = conv_pairs[-len(conv_modules):]
-    if len(dense_pairs) > len(linear_modules):
-        dense_pairs = dense_pairs[-len(linear_modules):]
+    if len(conv_pairs) != len(conv_modules) or len(dense_pairs) != len(linear_modules):
+        available = ", ".join(list(tensors.keys())[:10])
+        raise RuntimeError(
+            f"Mismatch conv_pairs={len(conv_pairs)} (torch={len(conv_modules)}), "
+            f"dense_pairs={len(dense_pairs)} (torch={len(linear_modules)}). "
+            f"Sample tensors: {available}"
+        )
 
     for module, (k_np, b_np) in zip(conv_modules, conv_pairs, strict=False):
         module.weight.data = torch.tensor(k_np.transpose(3, 2, 0, 1), dtype=module.weight.dtype)

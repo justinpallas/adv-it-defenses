@@ -210,6 +210,8 @@ class _SmoeParams:
     weights_path: Path
     device: torch.device
     padding_mode: str
+    resize_to: int | None
+    grayscale_input: bool
     output_format: str | None
     overwrite: bool
     workers: int
@@ -251,19 +253,11 @@ class _SmoeRunner:
         h_blocks = channel.shape[2] // block
         w_blocks = channel.shape[3] // block
 
-        # Non-overlapping tiling: reshape rather than nested unfold to preserve block order.
+        # Non-overlapping tiling with unfold/fold to preserve ordering.
+        unfolded = F.unfold(channel, kernel_size=block, stride=block)  # [1, block*block, L]
         blocks = (
-            channel.view(
-                channel.shape[0],
-                channel.shape[1],
-                h_blocks,
-                block,
-                w_blocks,
-                block,
-            )
-            .permute(0, 1, 2, 4, 3, 5)
-            .contiguous()
-            .view(-1, 1, block, block)
+            unfolded.permute(0, 2, 1)  # [1, L, block*block]
+            .reshape(-1, 1, block, block)  # [L, 1, block, block]
         )
 
         outputs: list[torch.Tensor] = []
@@ -272,19 +266,15 @@ class _SmoeRunner:
                 chunk = chunk.to(self.params.device)
                 decoded = self.model(chunk)
                 outputs.append(decoded.cpu())
-        recon_blocks = torch.cat(outputs, dim=0)
-
-        recon_blocks = (
-            recon_blocks.view(1, 1, h_blocks, w_blocks, block, block)
-            .permute(0, 1, 2, 4, 3, 5)
-            .contiguous()
-            .view(1, 1, h_blocks * block, w_blocks * block)
-        )
+        recon_blocks = torch.cat(outputs, dim=0)  # [L, 1, block, block]
+        recon_flat = recon_blocks.view(1, recon_blocks.shape[0], block * block)  # [1, L, k*k]
+        recon_flat = recon_flat.permute(0, 2, 1)  # [1, k*k, L]
+        recon_full = F.fold(recon_flat, output_size=(h_blocks * block, w_blocks * block), kernel_size=block, stride=block)
 
         if pad_h or pad_w:
-            recon_blocks = recon_blocks[:, :, : channel.shape[2] - pad_h, : channel.shape[3] - pad_w]
+            recon_full = recon_full[:, :, : channel.shape[2] - pad_h, : channel.shape[3] - pad_w]
 
-        return recon_blocks
+        return recon_full
 
     def process_image(self, image_path: Path, output_path: Path) -> None:
         with Image.open(image_path) as img:
@@ -292,16 +282,36 @@ class _SmoeRunner:
                 img = img.convert("RGB")
             arr = np.asarray(img, dtype=np.float32) / 255.0
 
-        tensor = torch.from_numpy(arr).permute(2, 0, 1).unsqueeze(0)  # [1, 3, H, W]
+        original_size = (arr.shape[1], arr.shape[0])
+        if self.params.resize_to:
+            target = self.params.resize_to
+            img = Image.fromarray((arr * 255).round().astype(np.uint8), mode="RGB")
+            img = img.resize((target, target), Image.BILINEAR)
+            arr = np.asarray(img, dtype=np.float32) / 255.0
 
-        recon_channels: list[torch.Tensor] = []
-        for idx in range(3):
-            channel = tensor[:, idx : idx + 1, :, :]
-            recon = self._process_channel(channel)
-            recon_channels.append(recon)
+        if self.params.grayscale_input:
+            img_gray = Image.fromarray((arr * 255).round().astype(np.uint8), mode="RGB").convert("L")
+            arr_gray = np.asarray(img_gray, dtype=np.float32) / 255.0
+            tensor = torch.from_numpy(arr_gray).unsqueeze(0).unsqueeze(0)  # [1,1,H,W]
+            recon = self._process_channel(tensor)
+            recon_np = recon.squeeze(0).squeeze(0).clamp(0.0, 1.0).numpy()
+            recon_np = np.stack([recon_np] * 3, axis=-1)
+        else:
+            tensor = torch.from_numpy(arr).permute(2, 0, 1).unsqueeze(0)  # [1, 3, H, W]
+            recon_channels: list[torch.Tensor] = []
+            for idx in range(3):
+                channel = tensor[:, idx : idx + 1, :, :]
+                recon = self._process_channel(channel)
+                recon_channels.append(recon)
+            recon_tensor = torch.cat(recon_channels, dim=1).squeeze(0)
+            recon_np = recon_tensor.permute(1, 2, 0).clamp(0.0, 1.0).numpy()
 
-        recon_tensor = torch.cat(recon_channels, dim=1).squeeze(0)
-        recon_np = (recon_tensor.permute(1, 2, 0).clamp(0.0, 1.0).numpy() * 255.0).round().astype(np.uint8)
+        recon_np = (recon_np * 255.0).round().astype(np.uint8)
+        if self.params.resize_to and (recon_np.shape[1] != original_size[0] or recon_np.shape[0] != original_size[1]):
+            recon_np = np.asarray(
+                Image.fromarray(recon_np, mode="RGB").resize(original_size, Image.BILINEAR),
+                dtype=np.uint8,
+            )
 
         output_path.parent.mkdir(parents=True, exist_ok=True)
         Image.fromarray(recon_np, mode="RGB").save(
@@ -346,6 +356,9 @@ class SmoeAEDefense(Defense):
         overwrite = bool(params.get("overwrite", True))
         workers = int(params.get("workers", max(1, (os.cpu_count() or 2) - 1)))
         batch_blocks = int(params.get("batch_blocks", 256))
+        resize_to_param = params.get("resize_to")
+        resize_to = int(resize_to_param) if resize_to_param is not None else None
+        grayscale_input = bool(params.get("grayscale_input", False))
 
         self._params = _SmoeParams(
             patterns=patterns,
@@ -356,6 +369,8 @@ class SmoeAEDefense(Defense):
             weights_path=weights_path,
             device=device,
             padding_mode=padding_mode,
+            resize_to=resize_to,
+            grayscale_input=grayscale_input,
             output_format=output_format,
             overwrite=overwrite,
             workers=workers,
