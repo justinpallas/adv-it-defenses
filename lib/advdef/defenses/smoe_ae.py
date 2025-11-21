@@ -251,9 +251,20 @@ class _SmoeRunner:
         h_blocks = channel.shape[2] // block
         w_blocks = channel.shape[3] // block
 
-        blocks = channel.unfold(2, block, block).unfold(3, block, block)
-        # Reorder to (B, C, H_blocks, W_blocks, block, block) before flattening.
-        blocks = blocks.permute(0, 1, 2, 4, 3, 5).contiguous().view(-1, 1, block, block)
+        # Non-overlapping tiling: reshape rather than nested unfold to preserve block order.
+        blocks = (
+            channel.view(
+                channel.shape[0],
+                channel.shape[1],
+                h_blocks,
+                block,
+                w_blocks,
+                block,
+            )
+            .permute(0, 1, 2, 4, 3, 5)
+            .contiguous()
+            .view(-1, 1, block, block)
+        )
 
         outputs: list[torch.Tensor] = []
         with torch.no_grad():
@@ -264,8 +275,8 @@ class _SmoeRunner:
         recon_blocks = torch.cat(outputs, dim=0)
 
         recon_blocks = (
-            recon_blocks.view(1, h_blocks, w_blocks, block, block)
-            .permute(0, 1, 3, 2, 4)
+            recon_blocks.view(1, 1, h_blocks, w_blocks, block, block)
+            .permute(0, 1, 2, 4, 3, 5)
             .contiguous()
             .view(1, 1, h_blocks * block, w_blocks * block)
         )
