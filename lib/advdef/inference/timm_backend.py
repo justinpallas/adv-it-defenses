@@ -133,12 +133,39 @@ class TimmInferenceBackend(InferenceBackend):
         if device.type == "cpu" and device_choice == "cuda":
             print("[warn] CUDA requested for inference but not available. Falling back to CPU.")
 
-        if checkpoint:
-            model = create_model(architecture, pretrained=pretrained, checkpoint_path=str(checkpoint))
-        else:
-            model = create_model(architecture, pretrained=pretrained)
+        model = create_model(architecture, pretrained=pretrained)
         model.eval()
         model.to(device)
+
+        if checkpoint:
+            checkpoint_strict = bool(model_params.get("checkpoint_strict", False))
+            try:
+                raw_state = torch.load(checkpoint, map_location=device)
+            except Exception as exc:  # pragma: no cover - runtime dependent
+                raise RuntimeError(f"Failed to load checkpoint at {checkpoint}: {exc}") from exc
+
+            state_dict = raw_state
+            if isinstance(raw_state, dict):
+                if "state_dict" in raw_state:
+                    state_dict = raw_state["state_dict"]
+                elif "model" in raw_state:
+                    state_dict = raw_state["model"]
+
+            if not isinstance(state_dict, dict):
+                raise TypeError(
+                    f"Checkpoint at {checkpoint} did not contain a state_dict; keys: "
+                    f"{list(raw_state.keys()) if isinstance(raw_state, dict) else type(raw_state)}"
+                )
+
+            load_result = model.load_state_dict(state_dict, strict=checkpoint_strict)
+            missing = getattr(load_result, "missing_keys", [])
+            unexpected = getattr(load_result, "unexpected_keys", [])
+            if missing or unexpected:
+                print(
+                    "[warn] Checkpoint loaded with mismatches: "
+                    f"missing={missing or '<none>'}, unexpected={unexpected or '<none>'}, "
+                    f"strict={checkpoint_strict}"
+                )
 
         data_config = resolve_data_config({}, model=model)
 
