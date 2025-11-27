@@ -13,3 +13,10 @@ class ModelConfig(ModuleConfig):
     checkpoint: str | None = Field(
         default=None, description="Optional path to a model checkpoint."
     )
+
+    defense_checkpoints: dict[str, str] = Field(
+        default_factory=dict,
+        description=(
+            "Optional map of defense names to fine-tuned checkpoints for extra inference runs."
+        ),
+    )

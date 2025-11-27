@@ -283,23 +283,99 @@ class Pipeline:
         self.context.save_state()
         return defended
 
-    def run_inference(self, variants: Iterable[DatasetVariant], namespace: str) -> List[InferenceResult]:
+    def run_inference(
+        self,
+        variants: Iterable[DatasetVariant],
+        namespace: str,
+        model_config: ModelConfig | None = None,
+        inference_label: str | None = None,
+    ) -> List[InferenceResult]:
+        model_cfg = model_config or self.config.model
         inference_cls = INFERENCE_BACKENDS.get(self.config.inference.type)
-        backend: InferenceBackend = inference_cls(self.config.inference, self.config.model)
+        backend: InferenceBackend = inference_cls(self.config.inference, model_cfg)
         inference_state = self._steps_state.setdefault("inference", {})
         namespace_state: Dict[str, Dict[str, Any]] = inference_state.setdefault(namespace, {})
         results: List[InferenceResult] = []
         for variant in variants:
             cached = namespace_state.get(variant.name)
             if self._resume_enabled and cached:
-                results.append(InferenceResult.from_state(variant, cached))
+                result = InferenceResult.from_state(variant, cached)
+                result.metadata = self._annotate_inference_metadata(result.metadata, namespace, model_cfg, inference_label)
+                results.append(result)
                 continue
-            print(f"[debug] running inference for {variant.name}")
+            print(f"[debug] running inference for {variant.name} [{namespace}]")
             result = backend.run(self.context, variant)
+            result.metadata = self._annotate_inference_metadata(result.metadata, namespace, model_cfg, inference_label)
             namespace_state[variant.name] = result.to_state()
             self.context.save_state()
             results.append(result)
         return results
+
+    def _annotate_inference_metadata(
+        self,
+        metadata: Dict[str, Any],
+        namespace: str,
+        model_config: ModelConfig,
+        inference_label: str | None,
+    ) -> Dict[str, Any]:
+        annotated = copy.deepcopy(metadata) if metadata is not None else {}
+        annotated.setdefault("namespace", namespace)
+        model_label = model_config.name or model_config.type
+        annotated.setdefault("model_label", model_label)
+        if inference_label:
+            annotated.setdefault("inference_label", inference_label)
+        if model_config.checkpoint:
+            annotated.setdefault("checkpoint", str(model_config.checkpoint))
+        return annotated
+
+    def _run_defense_finetuned_inference(
+        self, defended_variants: Iterable[DatasetVariant]
+    ) -> tuple[list[DatasetVariant], list[InferenceResult]]:
+        defense_checkpoints = getattr(self.config.model, "defense_checkpoints", {}) or {}
+        if not defense_checkpoints:
+            return [], []
+
+        variants_by_defense: Dict[str, List[DatasetVariant]] = {}
+
+        for variant in defended_variants:
+            defense_name = None
+            if isinstance(variant.metadata, dict):
+                defense_name = variant.metadata.get("defense")
+            checkpoint = defense_checkpoints.get(defense_name) if defense_name else None
+            if not checkpoint:
+                continue
+
+            metadata = copy.deepcopy(variant.metadata)
+            metadata["source_variant"] = variant.name
+            metadata["inference_role"] = "fine_tuned"
+            metadata["inference_checkpoint"] = str(checkpoint)
+            metadata["inference_target_defense"] = defense_name
+            tuned_variant = DatasetVariant(
+                name=f"{variant.name}-finetuned",
+                data_dir=variant.data_dir,
+                parent=variant.name,
+                metadata=metadata,
+            )
+            variants_by_defense.setdefault(defense_name, []).append(tuned_variant)
+
+        finetuned_variants: List[DatasetVariant] = []
+        finetuned_results: List[InferenceResult] = []
+
+        for defense_name, variants in variants_by_defense.items():
+            checkpoint = defense_checkpoints[defense_name]
+            finetuned_variants.extend(variants)
+            model_cfg = self.config.model.model_copy(update={"checkpoint": checkpoint})
+            label = f"{defense_name}-finetuned"
+            finetuned_results.extend(
+                self.run_inference(
+                    variants,
+                    namespace=f"defended-{defense_name}-finetuned",
+                    model_config=model_cfg,
+                    inference_label=label,
+                )
+            )
+
+        return finetuned_variants, finetuned_results
 
     def run_evaluation(
         self,
@@ -327,8 +403,10 @@ class Pipeline:
         defended = self.run_defenses(variants)
         defended_inferences = self.run_inference(defended, "defended")
 
-        combined_variants = list(variants) + list(defended)
-        combined_inferences = list(baseline_inferences) + list(defended_inferences)
+        finetuned_variants, finetuned_inferences = self._run_defense_finetuned_inference(defended)
+
+        combined_variants = list(variants) + list(defended) + list(finetuned_variants)
+        combined_inferences = list(baseline_inferences) + list(defended_inferences) + list(finetuned_inferences)
 
         self.variant_records = [
             {
@@ -344,6 +422,8 @@ class Pipeline:
         attack_normalized: Dict[str, Dict[str, Any]] = {}
         for record in self.variant_records:
             metadata = record.get("metadata", {})
+            if metadata.get("inference_role") == "fine_tuned":
+                continue
             attack_name = metadata.get("attack")
             stats = metadata.get("normalized_l2")
             if not attack_name or not isinstance(stats, dict):
