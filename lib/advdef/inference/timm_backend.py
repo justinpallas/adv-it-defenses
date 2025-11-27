@@ -140,12 +140,38 @@ class TimmInferenceBackend(InferenceBackend):
         if checkpoint:
             checkpoint_strict = bool(model_params.get("checkpoint_strict", False))
             checkpoint_weights_only = bool(model_params.get("checkpoint_weights_only", False))
+
+            def _load_attempt(*, map_location, weights_only: bool | None):
+                if weights_only is None:
+                    return torch.load(checkpoint, map_location=map_location)
+                return torch.load(checkpoint, map_location=map_location, weights_only=weights_only)
+
+            raw_state = None
+            first_error: Exception | None = None
             try:
-                raw_state = torch.load(checkpoint, map_location=device, weights_only=checkpoint_weights_only)
-            except TypeError:
-                raw_state = torch.load(checkpoint, map_location=device)
-            except Exception as exc:  # pragma: no cover - runtime dependent
-                raise RuntimeError(f"Failed to load checkpoint at {checkpoint}: {exc}") from exc
+                raw_state = _load_attempt(map_location=device, weights_only=checkpoint_weights_only)
+            except TypeError as exc:
+                first_error = exc
+                try:
+                    raw_state = _load_attempt(map_location=device, weights_only=None)
+                except Exception as inner:
+                    first_error = inner
+            except Exception as exc:
+                first_error = exc
+
+            if raw_state is None:
+                try:
+                    raw_state = _load_attempt(map_location="cpu", weights_only=False)
+                    print(
+                        f"[warn] Checkpoint at {checkpoint} loaded on CPU after device load failure: {first_error}"
+                    )
+                except TypeError:
+                    raw_state = _load_attempt(map_location="cpu", weights_only=None)
+                    print(
+                        f"[warn] Checkpoint at {checkpoint} loaded on CPU (legacy torch.load) after failure: {first_error}"
+                    )
+                except Exception as exc:  # pragma: no cover - runtime dependent
+                    raise RuntimeError(f"Failed to load checkpoint at {checkpoint}: {first_error}") from exc
 
             state_dict = raw_state
             if isinstance(raw_state, dict):
