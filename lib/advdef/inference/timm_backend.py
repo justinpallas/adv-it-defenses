@@ -180,6 +180,17 @@ class TimmInferenceBackend(InferenceBackend):
                 elif "model" in raw_state:
                     state_dict = raw_state["model"]
 
+            if isinstance(state_dict, dict):
+                remapped = False
+                for key in list(state_dict.keys()):
+                    if key.startswith("fc.1.") or ".fc.1." in key:
+                        new_key = key.replace("fc.1.", "fc.", 1) if key.startswith("fc.1.") else key.replace(".fc.1.", ".fc.", 1)
+                        if new_key not in state_dict:
+                            state_dict[new_key] = state_dict[key]
+                            remapped = True
+                if remapped:
+                    print("[info] Remapped checkpoint keys from fc.1.* to fc.* for compatibility.")
+
             if not isinstance(state_dict, dict):
                 raise TypeError(
                     f"Checkpoint at {checkpoint} did not contain a state_dict; keys: "
