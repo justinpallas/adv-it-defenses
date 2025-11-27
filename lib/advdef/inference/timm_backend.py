@@ -139,7 +139,10 @@ class TimmInferenceBackend(InferenceBackend):
 
         if checkpoint:
             checkpoint_strict = bool(model_params.get("checkpoint_strict", False))
+            checkpoint_weights_only = bool(model_params.get("checkpoint_weights_only", False))
             try:
+                raw_state = torch.load(checkpoint, map_location=device, weights_only=checkpoint_weights_only)
+            except TypeError:
                 raw_state = torch.load(checkpoint, map_location=device)
             except Exception as exc:  # pragma: no cover - runtime dependent
                 raise RuntimeError(f"Failed to load checkpoint at {checkpoint}: {exc}") from exc
