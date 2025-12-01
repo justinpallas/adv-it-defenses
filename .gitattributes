@@ -1,1 +1,2 @@
 lib/advdef/inference/weights/resnet50-bm3d.pt filter=lfs diff=lfs merge=lfs -text
+lib/advdef/inference/weights/resnet50-r_smoe.pt filter=lfs diff=lfs merge=lfs -text
