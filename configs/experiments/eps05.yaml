@@ -1,4 +1,4 @@
-name: standard_resnet_eps05
+name: eps05
 description: >
   Evaluate all defense methods against APGD-CE, Square and APGD-L2 attacks (eps=0.05) on a standard ResNet-50 model.
 seed: 123
@@ -31,9 +31,27 @@ dataset:
         device: cuda
 model:
   type: timm
+  name: resnet50
   params:
     architecture: resnet50
     pretrained: true
+  defense_checkpoints:
+    bm3d: lib/advdef/inference/weights/resnet50-bm3d.pt
+    r-smoe: lib/advdef/inference/weights/resnet50-r_smoe.pt
+    low-pass: lib/advdef/inference/weights/resnet50-low_pass.pt
+    bit-depth: lib/advdef/inference/weights/resnet50-bit_depth.pt
+    tvm: lib/advdef/inference/weights/resnet50-tvm.pt
+additional_inference_models:
+  - type: timm
+    name: resnet101
+    params:
+      architecture: resnet101
+      pretrained: true
+  - type: timm
+    name: MobileNetV3
+    params:
+      architecture: mobilenetv3_large_100
+      pretrained: true
 inference:
   type: timm
   params:
