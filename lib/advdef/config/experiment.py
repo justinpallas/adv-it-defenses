@@ -24,6 +24,13 @@ class ExperimentConfig(BaseModel):
     dataset: DatasetConfig
     defenses: List[DefenseConfig] = Field(default_factory=list)
     model: ModelConfig = Field(default_factory=lambda: ModelConfig(type="timm"))
+    additional_inference_models: List[ModelConfig] = Field(
+        default_factory=list,
+        description=(
+            "Optional list of extra models to evaluate during inference. "
+            "The primary model still drives attack generation."
+        ),
+    )
     inference: InferenceConfig = Field(default_factory=lambda: InferenceConfig(type="timm"))
     evaluation: EvaluationConfig = Field(default_factory=lambda: EvaluationConfig(type="imagenet"))
     tags: List[str] = Field(default_factory=list)

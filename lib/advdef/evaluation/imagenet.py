@@ -96,6 +96,7 @@ class ImageNetEvaluator(Evaluator):
         label_map = _build_label_map(samples)
 
         metrics: Dict[str, object] = {"variants": {}, "topk": topk_values}
+        results_by_variant: Dict[str, List[tuple[str, Dict[str, float]]]] = {}
 
         for result in inferences:
             preds, filenames = _load_predictions(result, max_topk)
@@ -133,6 +134,33 @@ class ImageNetEvaluator(Evaluator):
                 variant_metrics[f"top{k}_correct"] = int(correct.sum())
 
             variant_metrics["num_samples"] = int(ground_truth_arr.size)
-            metrics["variants"][result.variant.name] = variant_metrics
+            label = (
+                result.metadata.get("inference_label")
+                or result.metadata.get("model_label")
+                or "default"
+            )
+            results_by_variant.setdefault(result.variant.name, []).append((label, variant_metrics))
+
+        for variant_name, entries in results_by_variant.items():
+            if len(entries) == 1:
+                label, variant_metrics = entries[0]
+                metrics["variants"][variant_name] = variant_metrics
+                if label:
+                    labels_map = metrics.setdefault("inference_labels", {})
+                    labels_map[variant_name] = label
+                continue
+
+            variant_bucket: Dict[str, Dict[str, float]] = {}
+
+            for label, variant_metrics in entries:
+                key = label or "default"
+                if key in variant_bucket:
+                    suffix = 2
+                    while f"{key}_{suffix}" in variant_bucket:
+                        suffix += 1
+                    key = f"{key}_{suffix}"
+                variant_bucket[key] = variant_metrics
+
+            metrics["variants"][variant_name] = variant_bucket
 
         return metrics

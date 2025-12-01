@@ -210,6 +210,16 @@ class Pipeline:
         self._steps_state = self.context.state.setdefault("steps", {})
         self._resume_enabled = bool(self.context.resume)
 
+    @staticmethod
+    def _label_for_model(model_config: ModelConfig) -> str:
+        """Human-friendly label for identifying inference outputs."""
+        return str(
+            model_config.name
+            or model_config.params.get("architecture")
+            or model_config.params.get("model_name")
+            or model_config.type
+        )
+
     def build_dataset(self) -> DatasetArtifacts:
         cached = self._steps_state.get("dataset")
         if self._resume_enabled and cached:
@@ -403,10 +413,35 @@ class Pipeline:
         defended = self.run_defenses(variants)
         defended_inferences = self.run_inference(defended, "defended")
 
+        extra_inferences: List[InferenceResult] = []
+        for model_cfg in self.config.additional_inference_models:
+            label = self._label_for_model(model_cfg)
+            extra_inferences.extend(
+                self.run_inference(
+                    variants,
+                    namespace=f"baseline-{label}",
+                    model_config=model_cfg,
+                    inference_label=label,
+                )
+            )
+            extra_inferences.extend(
+                self.run_inference(
+                    defended,
+                    namespace=f"defended-{label}",
+                    model_config=model_cfg,
+                    inference_label=label,
+                )
+            )
+
         finetuned_variants, finetuned_inferences = self._run_defense_finetuned_inference(defended)
 
         combined_variants = list(variants) + list(defended) + list(finetuned_variants)
-        combined_inferences = list(baseline_inferences) + list(defended_inferences) + list(finetuned_inferences)
+        combined_inferences = (
+            list(baseline_inferences)
+            + list(defended_inferences)
+            + list(extra_inferences)
+            + list(finetuned_inferences)
+        )
 
         self.variant_records = [
             {
