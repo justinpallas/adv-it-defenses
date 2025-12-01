@@ -1,2 +1,6 @@
 lib/advdef/inference/weights/resnet50-bm3d.pt filter=lfs diff=lfs merge=lfs -text
 lib/advdef/inference/weights/resnet50-r_smoe.pt filter=lfs diff=lfs merge=lfs -text
+lib/advdef/inference/weights filter=lfs diff=lfs merge=lfs -text
+lib/advdef/inference/weights/resnet50-bit_depth.pt filter=lfs diff=lfs merge=lfs -text
+lib/advdef/inference/weights/resnet50-low_pass.pt filter=lfs diff=lfs merge=lfs -text
+lib/advdef/inference/weights/resnet50-tvm.pt filter=lfs diff=lfs merge=lfs -text
