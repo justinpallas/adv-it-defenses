@@ -180,7 +180,13 @@ class InferenceBackend(PipelineStep):
         self.model_config = model_config
 
     @abstractmethod
-    def run(self, context: RunContext, variant: DatasetVariant) -> InferenceResult:
+    def run(
+        self,
+        context: RunContext,
+        variant: DatasetVariant,
+        *,
+        namespace: str | None = None,
+    ) -> InferenceResult:
         raise NotImplementedError
 
 
@@ -314,7 +320,7 @@ class Pipeline:
                 results.append(result)
                 continue
             print(f"[debug] running inference for {variant.name} [{namespace}]")
-            result = backend.run(self.context, variant)
+            result = backend.run(self.context, variant, namespace=namespace)
             result.metadata = self._annotate_inference_metadata(result.metadata, namespace, model_cfg, inference_label)
             namespace_state[variant.name] = result.to_state()
             self.context.save_state()

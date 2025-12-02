@@ -112,7 +112,13 @@ class TimmInferenceBackend(InferenceBackend):
     def __init__(self, config: InferenceConfig, model_config: ModelConfig) -> None:
         super().__init__(config, model_config)
 
-    def run(self, context: RunContext, variant: DatasetVariant) -> InferenceResult:
+    def run(
+        self,
+        context: RunContext,
+        variant: DatasetVariant,
+        *,
+        namespace: str | None = None,
+    ) -> InferenceResult:
         params = self.config.params
         model_params = self.model_config.params
 
@@ -305,7 +311,9 @@ class TimmInferenceBackend(InferenceBackend):
                     record[f"top{rank}_label"] = class_map.get(int(index), str(int(index)))
                 records.append(record)
 
-        results_dir = ensure_dir(context.artifacts_dir / "inference" / variant.name)
+        base_results_dir = Path(self.config.results_dir) if self.config.results_dir else context.artifacts_dir / "inference"
+        ns_component = namespace or "default"
+        results_dir = ensure_dir(base_results_dir / ns_component / variant.name)
         predictions_path = results_dir / f"predictions.{output_format}"
 
         df = pd.DataFrame.from_records(records)
